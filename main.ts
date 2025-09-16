@@ -700,7 +700,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     // Check if player has enough TMT (at least 1 TMT)
     const profile = await getProfile(fromId);
     if (!profile || profile.tmt < 1) {
-      await sendMessage(fromId, "❌ TMT + Kubok oýna girmek üçin iň az 1 TMT gerek.");
+      await sendMessage(fromId, "❌ TMT + Kubok oýna girmek üçin iň az 1 TMT gerek.Balansyňyzy doldurmak üçin admina ýüz tutuň:@amangeldimasakov");
       return;
     }
 
