@@ -1,4 +1,3 @@
-
 // main.ts
 // Telegram Tic-Tac-Toe Bot (Deno) - Enhanced Game Design
 // Features: matchmaking (/battle), private-game with inline buttons,
@@ -868,6 +867,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
