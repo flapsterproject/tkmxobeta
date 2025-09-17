@@ -164,6 +164,7 @@ async function sendProfile(chatId: string) {
   const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
   const msg =
     `🏅 *Profil: ${getDisplayName(p)}*\n\n` +
+    `🆔 ID: \`${p.id}\`\n\n` + // <-- Added line for copiable Telegram ID
     `🏆 Kuboklar: *${p.trophies}*\n` +
     `💰 TMT Balansy: *${p.tmt}*\n` +
     `🏅 Rank: *${getRank(p.trophies)}*\n` +
