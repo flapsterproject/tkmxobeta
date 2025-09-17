@@ -8,7 +8,7 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-const TOKEN = Deno.env.get("BOT_TOKEN")!;
+const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/tkmxo"; // Make sure this matches your webhook URL
@@ -868,6 +868,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
