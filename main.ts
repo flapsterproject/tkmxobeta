@@ -873,6 +873,13 @@ serve(async (req: Request) => {
 
       await initProfile(fromId, username, displayName);
 
+       // ----------------- NEW: Ignore messages if user is searching or in battle -----------------
+  if (queue.includes(fromId) || trophyQueue.includes(fromId) || battles[fromId]) {
+    // User is searching for opponent or already in a battle → ignore everything
+    return new Response("OK"); // Do nothing
+  }
+  // ---------------------------------------------------------------------------------------
+
       if (text.startsWith("/")) {
         await handleCommand(fromId, username, displayName, text);
       } else {
