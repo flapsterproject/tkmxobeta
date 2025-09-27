@@ -25,6 +25,8 @@ let trophyQueue: string[] = [];
 const battles: Record<string, any> = {};
 const searchTimeouts: Record<string, number> = {};
 const withdrawalStates: Record<string, { amount: number; step: "amount" | "phone" }> = {};
+const globalMessageStates: Record<string, boolean> = {};
+
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
@@ -798,15 +800,6 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
-  if (text.startsWith("/withdraw")) {
-    const profile = await getProfile(fromId);
-    if (!profile) {
-      await sendMessage(fromId, "❌ TMT çykarmak üçin profil gerek. Ilki oýna başla!");
-      return;
-    }
-    await handleWithdrawal(fromId, "");
-    return;
-  }
   // Handle admin /globalmessage command
 if (text.startsWith("/globalmessage")) {
   if (username !== ADMIN_USERNAME.replace("@", "")) {
@@ -818,6 +811,17 @@ if (text.startsWith("/globalmessage")) {
   return;
 }
 
+
+  if (text.startsWith("/withdraw")) {
+    const profile = await getProfile(fromId);
+    if (!profile) {
+      await sendMessage(fromId, "❌ TMT çykarmak üçin profil gerek. Ilki oýna başla!");
+      return;
+    }
+    await handleWithdrawal(fromId, "");
+    return;
+  }
+  
 
   if (text.startsWith("/start") || text.startsWith("/help")) {
     const helpText =
@@ -835,26 +839,13 @@ if (text.startsWith("/globalmessage")) {
 
 
   // Handle ongoing withdrawal text input
-  if (text.startsWith("/")) {
-  await handleCommand(fromId, username, displayName, text);
-} else if (globalMessageStates[fromId]) {
-  // Admin is writing the global message
-  globalMessageStates[fromId] = false;
-
-  // Broadcast to all users
-  for await (const entry of kv.list({ prefix: ["profiles"] })) {
-    const profile = entry.value as Profile;
-    if (!profile) continue;
-    await sendMessage(profile.id, `📢 *Global Message:*\n\n${text}`, { parse_mode: "Markdown" });
+  if (withdrawalStates[fromId]) {
+    await handleWithdrawal(fromId, text);
+    return;
   }
 
-  await sendMessage(fromId, "✅ Global message sent!");
-} else if (withdrawalStates[fromId]) {
-  await handleWithdrawal(fromId, text);
-} else {
   await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
 }
-
 
 // -------------------- Server / Webhook --------------------
 serve(async (req: Request) => {
@@ -884,14 +875,25 @@ serve(async (req: Request) => {
       }
 
       if (text.startsWith("/")) {
-        await handleCommand(fromId, username, displayName, text);
-      } else {
-        if (withdrawalStates[fromId]) {
-          await handleWithdrawal(fromId, text);
-        } else {
-          await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
-        }
-      }
+  await handleCommand(fromId, username, displayName, text);
+} else if (globalMessageStates[fromId]) {
+  // Admin is writing the global message
+  globalMessageStates[fromId] = false;
+
+  // Broadcast to all users
+  for await (const entry of kv.list({ prefix: ["profiles"] })) {
+    const profile = entry.value as Profile;
+    if (!profile) continue;
+    await sendMessage(profile.id, `📢 *Global Message:*\n\n${text}`, { parse_mode: "Markdown" });
+  }
+
+  await sendMessage(fromId, "✅ Global message sent!");
+} else if (withdrawalStates[fromId]) {
+  await handleWithdrawal(fromId, text);
+} else {
+  await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
+}
+
     }
     // handle callback queries
     else if (update.callback_query) {
