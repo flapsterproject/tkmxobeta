@@ -685,6 +685,12 @@ async function getProfileByUsername(username: string): Promise<Profile | null> {
 
 // -------------------- Command Handlers --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
+  // Check if user is in battle or searching for opponent
+  if (queue.includes(fromId) || trophyQueue.includes(fromId) || battles[fromId]) {
+    await sendMessage(fromId, "Siz eýýäm bir oýunda ýa-da garşydaş gözlenýär. Ilki häzirki ýagdaýyňyzy ýa-da oýunyňy tamamlaň.");
+    return;
+  }
+
   if (text.startsWith("/battle")) {
     if (queue.includes(fromId)) {
       await sendMessage(fromId, "Siz eýýäm oýun nobatynda dursyňyz. Garşydaşyňyza garaşyň.");
@@ -873,12 +879,25 @@ serve(async (req: Request) => {
 
       await initProfile(fromId, username, displayName);
 
-       // ----------------- NEW: Ignore messages if user is searching or in battle -----------------
-  if (queue.includes(fromId) || trophyQueue.includes(fromId) || battles[fromId]) {
-    // User is searching for opponent or already in a battle → ignore everything
-    return new Response("OK"); // Do nothing
-  }
-  // ---------------------------------------------------------------------------------------
+      // Check if user is searching or in battle before processing commands
+      if (queue.includes(fromId) || trophyQueue.includes(fromId) || battles[fromId]) {
+        // User is searching for opponent or already in a battle → ignore everything except /help
+        if (text.startsWith("/help")) {
+          const helpText =
+            `🎮 *TkmXO Bot-a hoş geldiňiz!*\n\n` +
+            `Aşakdaky buýruklary ulanyň:\n` +
+            `🔹 /battle - Adaty kubok duşuşyk üçin garşydaş tap.\n` +
+            `🔹 /trophy - TMT + Kubok duşuşyk üçin garşydaş tap (1 TMT goýum talap edýär).\n` +
+            `🔹 /profile - Statistikalaryňy we derejäňizi gör.\n` +
+            `🔹 /leaderboard - Iň ýokary oýunçylary gör.\n` +
+            `🔹 /withdraw - TMT balansyňy çykarmak.\n\n` +
+            `Siz eýýäm bir oýunda ýa-da garşydaş gözlenýär. Ilki häzirki ýagdaýyňyzy ýa-da oýunyňy tamamlaň.`;
+          await sendMessage(fromId, helpText, { parse_mode: "Markdown" });
+        } else {
+          await sendMessage(fromId, "Siz eýýäm bir oýunda ýa-da garşydaş gözlenýär. Ilki häzirki ýagdaýyňyzy ýa-da oýunyňy tamamlaň.");
+        }
+        return new Response("OK");
+      }
 
       if (text.startsWith("/")) {
         await handleCommand(fromId, username, displayName, text);
