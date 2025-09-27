@@ -296,7 +296,7 @@ async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = fal
   await initProfile(p1);
   await initProfile(p2);
 
-  const battleTypeText = isTrophyBattle ? "🏆 *Trophy Battle*" : "⚔️ *Regular Battle*";
+  const battleTypeText = isTrophyBattle ? "🏆 *Pul üçin oýun*" : "⚔️ *Kubok üçin oýun*";
   const stakeText = isTrophyBattle ? "\n\nGoýumlar: Iki oýunçy hem 1 TMT töwekgelçilige salýar. Ýeňiji +0.75 TMT alýar." : "";
 
   await sendMessage(p1, `${battleTypeText}\n\nSen ❌ (X).${stakeText}\n\n*Oýun görnüşi:* 3 turdan ybarat vs ID:${p2}`, { parse_mode: "Markdown" });
