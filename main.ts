@@ -685,12 +685,6 @@ async function getProfileByUsername(username: string): Promise<Profile | null> {
 
 // -------------------- Command Handlers --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
-  // Check if user is in battle or searching for opponent
-  if (queue.includes(fromId) || trophyQueue.includes(fromId) || battles[fromId]) {
-    await sendMessage(fromId, "Siz eýýäm bir oýunda ýa-da garşydaş gözlenýär. Ilki häzirki ýagdaýyňyzy ýa-da oýunyňy tamamlaň.");
-    return;
-  }
-
   if (text.startsWith("/battle")) {
     if (queue.includes(fromId)) {
       await sendMessage(fromId, "Siz eýýäm oýun nobatynda dursyňyz. Garşydaşyňyza garaşyň.");
@@ -861,44 +855,6 @@ async function handleCommand(fromId: string, username: string | undefined, displ
   await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
 }
 
-// Function to process queue matching
-function processQueue() {
-  // Process regular battle queue
-  while (queue.length >= 2) {
-    const [p1, p2] = queue.splice(0, 2);
-    // Clear timeouts for both players since they are matched
-    if (searchTimeouts[p1]) {
-      clearTimeout(searchTimeouts[p1]);
-      delete searchTimeouts[p1];
-    }
-    if (searchTimeouts[p2]) {
-      clearTimeout(searchTimeouts[p2]);
-      delete searchTimeouts[p2];
-    }
-    startBattle(p1, p2).catch(console.error);
-  }
-
-  // Process trophy battle queue
-  while (trophyQueue.length >= 2) {
-    const [p1, p2] = trophyQueue.splice(0, 2);
-    // Clear timeouts for both players since they are matched
-    if (searchTimeouts[p1]) {
-      clearTimeout(searchTimeouts[p1]);
-      delete searchTimeouts[p1];
-    }
-    if (searchTimeouts[p2]) {
-      clearTimeout(searchTimeouts[p2]);
-      delete searchTimeouts[p2];
-    }
-    // Deduct 1 TMT from the second player as well (reserve)
-    updateProfile(p2, { tmt: -1 }).catch(console.error);
-    startBattle(p1, p2, true).catch(console.error); // true indicates it's a trophy battle
-  }
-}
-
-// Set interval to process queues every 100ms
-setInterval(processQueue, 100);
-
 // -------------------- Server --------------------
 serve(async (req: Request) => {
   try {
@@ -917,25 +873,12 @@ serve(async (req: Request) => {
 
       await initProfile(fromId, username, displayName);
 
-      // Check if user is searching or in battle before processing commands
-      if (queue.includes(fromId) || trophyQueue.includes(fromId) || battles[fromId]) {
-        // User is searching for opponent or already in a battle → ignore everything except /help
-        if (text.startsWith("/help")) {
-          const helpText =
-            `🎮 *TkmXO Bot-a hoş geldiňiz!*\n\n` +
-            `Aşakdaky buýruklary ulanyň:\n` +
-            `🔹 /battle - Adaty kubok duşuşyk üçin garşydaş tap.\n` +
-            `🔹 /trophy - TMT + Kubok duşuşyk üçin garşydaş tap (1 TMT goýum talap edýär).\n` +
-            `🔹 /profile - Statistikalaryňy we derejäňizi gör.\n` +
-            `🔹 /leaderboard - Iň ýokary oýunçylary gör.\n` +
-            `🔹 /withdraw - TMT balansyňy çykarmak.\n\n` +
-            `Siz eýýäm bir oýunda ýa-da garşydaş gözlenýär. Ilki häzirki ýagdaýyňyzy ýa-da oýunyňy tamamlaň.`;
-          await sendMessage(fromId, helpText, { parse_mode: "Markdown" });
-        } else {
-          await sendMessage(fromId, "Siz eýýäm bir oýunda ýa-da garşydaş gözlenýär. Ilki häzirki ýagdaýyňyzy ýa-da oýunyňy tamamlaň.");
-        }
-        return new Response("OK");
-      }
+       // ----------------- NEW: Ignore messages if user is searching or in battle -----------------
+  if (queue.includes(fromId) || trophyQueue.includes(fromId) || battles[fromId]) {
+    // User is searching for opponent or already in a battle → ignore everything
+    return new Response("OK"); // Do nothing
+  }
+  // ---------------------------------------------------------------------------------------
 
       if (text.startsWith("/")) {
         await handleCommand(fromId, username, displayName, text);
