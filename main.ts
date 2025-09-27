@@ -26,14 +26,6 @@ const battles: Record<string, any> = {};
 const searchTimeouts: Record<string, number> = {};
 const withdrawalStates: Record<string, { amount: number; step: "amount" | "phone" }> = {};
 const globalMessageStates: Record<string, boolean> = {};
-type Promo = {
-  tmt: number;
-  available: number;
-  usedBy: Set<string>;
-};
-
-let currentPromo: Promo | null = null;
-const userPromoStates: Record<string, boolean> = {}; // track if user is writing promo
 
 
 // -------------------- Telegram helpers --------------------
@@ -787,30 +779,6 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       return;
     }
 
-    // Admin creates a new promo code
-if (text.startsWith("/newpromocode")) {
-  if (username !== ADMIN_USERNAME.replace("@", "")) {
-    await sendMessage(fromId, "❌ Unauthorized.");
-    return;
-  }
-  const parts = text.trim().split(/\s+/);
-  if (parts.length < 3) {
-    await sendMessage(fromId, "Usage: /newpromocode <tmt> <available>");
-    return;
-  }
-  const tmt = parseFloat(parts[1]);
-  const available = parseInt(parts[2]);
-  if (isNaN(tmt) || isNaN(available) || tmt <= 0 || available <= 0) {
-    await sendMessage(fromId, "Invalid values. Example: /newpromocode 1 10");
-    return;
-  }
-
-  currentPromo = { tmt, available, usedBy: new Set() };
-  await sendMessage(fromId, `✅ Promo code created: Every user can receive ${tmt} TMT. Total available: ${available}`);
-  return;
-}
-
-
     const type = parts[1];
     const userId = parts[2];
     const amount = parseFloat(parts[3]);
@@ -840,17 +808,6 @@ if (text.startsWith("/globalmessage")) {
   }
   globalMessageStates[fromId] = true;
   await sendMessage(fromId, "✏️ Write your global message:");
-  return;
-}
-
-// User wants to activate promocode
-if (text.startsWith("/promocode")) {
-  if (!currentPromo || currentPromo.available <= 0) {
-    await sendMessage(fromId, "❌ No active promocode at the moment.");
-    return;
-  }
-  userPromoStates[fromId] = true;
-  await sendMessage(fromId, "✏️ Write your promocode:");
   return;
 }
 
@@ -931,30 +888,11 @@ serve(async (req: Request) => {
   }
 
   await sendMessage(fromId, "✅ Global message sent!");
+} else if (withdrawalStates[fromId]) {
+  await handleWithdrawal(fromId, text);
 } else {
-  if (withdrawalStates[fromId]) {
-    await handleWithdrawal(fromId, text);
-  } 
-  else if (userPromoStates[fromId]) {
-    userPromoStates[fromId] = false;
-
-    if (!currentPromo || currentPromo.available <= 0) {
-      await sendMessage(fromId, "❌ Promo code not available.");
-    } else if (currentPromo.usedBy.has(fromId)) {
-      await sendMessage(fromId, "❌ You already activated this promo code.");
-    } else {
-      // Give TMT to user
-      await updateProfile(fromId, { tmt: currentPromo.tmt });
-      currentPromo.usedBy.add(fromId);
-      currentPromo.available -= 1;
-      await sendMessage(fromId, `🎉 You received ${currentPromo.tmt} TMT from the promo code!`);
-    }
-  }
-  else {
-    await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
-  }
+  await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
 }
-
 
     }
     // handle callback queries
