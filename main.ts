@@ -14,7 +14,7 @@ const SECRET_PATH = "/tkmxo"; // Make sure this matches your webhook URL
 
 // Deno KV
 const kv = await Deno.openKv();
-const ADMIN_USERNAME = "@amangeldimasakov"; // keep as username check, change to ADMIN_ID if you want id-based admin
+const ADMIN_USERNAME = "@Masakoff"; // keep as username check, change to ADMIN_ID if you want id-based admin
 
 let queue: string[] = [];
 let trophyQueue: string[] = []; // Queue for trophy battles
@@ -724,11 +724,11 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
-  if (text.startsWith("/trophy")) {
+  if (text.startsWith("/realbattle")) {
     // Check if player has enough TMT (at least 1 TMT)
     const profile = await getProfile(fromId);
     if (!profile || profile.tmt < 1) {
-      await sendMessage(fromId, "❌ TMT + Kubok oýna girmek üçin iň az 1 TMT gerek.Balansyňyzy doldurmak üçin 👉 @amangeldimasakov");
+      await sendMessage(fromId, "❌ TMT + Kubok oýna girmek üçin iň az 1 TMT gerek.Balansyňyzy doldurmak üçin 👉 @Masakoff");
       return;
     }
 
@@ -837,7 +837,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       `🎮 *TkmXO Bot-a hoş geldiňiz!*\n\n` +
       `Aşakdaky buýruklary ulanyň:\n` +
       `🔹 /battle - Adaty kubok duşuşyk üçin garşydaş tap.\n` +
-      `🔹 /trophy - TMT + Kubok duşuşyk üçin garşydaş tap (1 TMT goýum talap edýär).\n` +
+      `🔹 /realbattle - TMT + Kubok duşuşyk üçin garşydaş tap (1 TMT goýum talap edýär).\n` +
       `🔹 /profile - Statistikalaryňy we derejäňizi gör.\n` +
       `🔹 /leaderboard - Iň ýokary oýunçylary gör.\n` +
       `🔹 /withdraw - TMT balansyňy çykarmak.\n\n` +
@@ -888,7 +888,7 @@ serve(async (req: Request) => {
           await handleWithdrawal(fromId, text);
         } else {
           // Handle non-command messages, e.g., send help
-          await sendMessage(fromId, "/help ýazyň, elýeterli buýruklary görmek üçin.");
+          await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
         }
       }
     } else if (update.callback_query) {
