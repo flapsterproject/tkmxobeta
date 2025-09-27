@@ -884,7 +884,7 @@ serve(async (req: Request) => {
   for await (const entry of kv.list({ prefix: ["profiles"] })) {
     const profile = entry.value as Profile;
     if (!profile) continue;
-    await sendMessage(profile.id, `📢 *Global Message:*\n\n${text}`, { parse_mode: "Markdown" });
+    await sendMessage(profile.id, `📢 *Global Bildiriş:*\n\n${text}`, { parse_mode: "Markdown" });
   }
 
   await sendMessage(fromId, "✅ Global message sent!");
