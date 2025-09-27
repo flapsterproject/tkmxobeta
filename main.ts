@@ -427,8 +427,8 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
 
       if (battle.isTrophyBattle) {
         // Winner +0.75, loser -1 (net transfer logic stored as decimals)
-        await updateProfile(winner, { tmt: 0.75 });
-        await updateProfile(loser, { tmt: -1 });
+        await updateProfile(winner, { tmt: 1.75 });
+        await updateProfile(loser, { tmt: -0 });
         await sendMessage(winner, "🏆 TMT + Kubok oýunda ýeňeniňiz üçin 0.75 TMT aldyňyz!");
         await sendMessage(loser, "💔 TMT + Kubok oýunda utulanyňyz üçin 1 TMT alyndy.");
       }
