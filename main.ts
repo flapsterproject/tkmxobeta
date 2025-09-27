@@ -861,6 +861,44 @@ async function handleCommand(fromId: string, username: string | undefined, displ
   await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
 }
 
+// Function to process queue matching
+function processQueue() {
+  // Process regular battle queue
+  while (queue.length >= 2) {
+    const [p1, p2] = queue.splice(0, 2);
+    // Clear timeouts for both players since they are matched
+    if (searchTimeouts[p1]) {
+      clearTimeout(searchTimeouts[p1]);
+      delete searchTimeouts[p1];
+    }
+    if (searchTimeouts[p2]) {
+      clearTimeout(searchTimeouts[p2]);
+      delete searchTimeouts[p2];
+    }
+    startBattle(p1, p2).catch(console.error);
+  }
+
+  // Process trophy battle queue
+  while (trophyQueue.length >= 2) {
+    const [p1, p2] = trophyQueue.splice(0, 2);
+    // Clear timeouts for both players since they are matched
+    if (searchTimeouts[p1]) {
+      clearTimeout(searchTimeouts[p1]);
+      delete searchTimeouts[p1];
+    }
+    if (searchTimeouts[p2]) {
+      clearTimeout(searchTimeouts[p2]);
+      delete searchTimeouts[p2];
+    }
+    // Deduct 1 TMT from the second player as well (reserve)
+    updateProfile(p2, { tmt: -1 }).catch(console.error);
+    startBattle(p1, p2, true).catch(console.error); // true indicates it's a trophy battle
+  }
+}
+
+// Set interval to process queues every 100ms
+setInterval(processQueue, 100);
+
 // -------------------- Server --------------------
 serve(async (req: Request) => {
   try {
