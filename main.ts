@@ -807,6 +807,17 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     await handleWithdrawal(fromId, "");
     return;
   }
+  // Handle admin /globalmessage command
+if (text.startsWith("/globalmessage")) {
+  if (username !== ADMIN_USERNAME.replace("@", "")) {
+    await sendMessage(fromId, "❌ Unauthorized.");
+    return;
+  }
+  globalMessageStates[fromId] = true;
+  await sendMessage(fromId, "✏️ Write your global message:");
+  return;
+}
+
 
   if (text.startsWith("/start") || text.startsWith("/help")) {
     const helpText =
@@ -822,18 +833,12 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
-  // Handle admin /globalmessage command
-if (text.startsWith("/globalmessage")) {
-  if (username !== ADMIN_USERNAME.replace("@", "")) {
-    await sendMessage(fromId, "❌ Unauthorized.");
-    return;
-  }
-  globalMessageStates[fromId] = true;
-  await sendMessage(fromId, "✏️ Write your global message:");
-  return;
-}
-// Check if admin is writing a global message
-if (globalMessageStates[fromId]) {
+
+  // Handle ongoing withdrawal text input
+  if (text.startsWith("/")) {
+  await handleCommand(fromId, username, displayName, text);
+} else if (globalMessageStates[fromId]) {
+  // Admin is writing the global message
   globalMessageStates[fromId] = false;
 
   // Broadcast to all users
@@ -844,20 +849,12 @@ if (globalMessageStates[fromId]) {
   }
 
   await sendMessage(fromId, "✅ Global message sent!");
-  return new Response("OK");
-}
-
-
-
-
-  // Handle ongoing withdrawal text input
-  if (withdrawalStates[fromId]) {
-    await handleWithdrawal(fromId, text);
-    return;
-  }
-
+} else if (withdrawalStates[fromId]) {
+  await handleWithdrawal(fromId, text);
+} else {
   await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
 }
+
 
 // -------------------- Server / Webhook --------------------
 serve(async (req: Request) => {
@@ -896,7 +893,6 @@ serve(async (req: Request) => {
         }
       }
     }
-    
     // handle callback queries
     else if (update.callback_query) {
       const cb = update.callback_query;
