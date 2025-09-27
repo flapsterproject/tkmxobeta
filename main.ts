@@ -822,6 +822,34 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
+  // Handle admin /globalmessage command
+if (text.startsWith("/globalmessage")) {
+  if (username !== ADMIN_USERNAME.replace("@", "")) {
+    await sendMessage(fromId, "❌ Unauthorized.");
+    return;
+  }
+  globalMessageStates[fromId] = true;
+  await sendMessage(fromId, "✏️ Write your global message:");
+  return;
+}
+// Check if admin is writing a global message
+if (globalMessageStates[fromId]) {
+  globalMessageStates[fromId] = false;
+
+  // Broadcast to all users
+  for await (const entry of kv.list({ prefix: ["profiles"] })) {
+    const profile = entry.value as Profile;
+    if (!profile) continue;
+    await sendMessage(profile.id, `📢 *Global Message:*\n\n${text}`, { parse_mode: "Markdown" });
+  }
+
+  await sendMessage(fromId, "✅ Global message sent!");
+  return new Response("OK");
+}
+
+
+
+
   // Handle ongoing withdrawal text input
   if (withdrawalStates[fromId]) {
     await handleWithdrawal(fromId, text);
@@ -868,6 +896,7 @@ serve(async (req: Request) => {
         }
       }
     }
+    
     // handle callback queries
     else if (update.callback_query) {
       const cb = update.callback_query;
