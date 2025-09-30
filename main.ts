@@ -973,6 +973,55 @@ async function handleCreateBoss(msg: any, fromId: string) {
   delete createBossStates[fromId];
 }
 
+// -------------------- Stats for admin --------------------
+async function sendStats(chatId: string) {
+  let userCount = 0;
+  let totalTMTFromPromos = 0;
+  let totalGamesPlayed = 0;
+  let totalTrophies = 0;
+  let totalTMT = 0;
+  let bossCount = 0;
+  let bossBattlesPlayed = 0;
+
+  // Count users and sum stats
+  for await (const entry of kv.list({ prefix: ["profiles"] })) {
+    if (!entry.value) continue;
+    const p = entry.value as Profile;
+    if (p.id.startsWith("boss_")) continue; // Exclude bosses
+    userCount++;
+    totalGamesPlayed += p.gamesPlayed || 0;
+    totalTrophies += p.trophies || 0;
+    totalTMT += p.tmt || 0;
+  }
+
+  // Sum TMT from promocodes (assuming each use gives 1 TMT)
+  for await (const entry of kv.list({ prefix: ["promocodes"] })) {
+    if (!entry.value) continue;
+    const promo = entry.value as { maxUses: number; currentUses: number };
+    totalTMTFromPromos += promo.currentUses;
+  }
+
+  // Count bosses and sum battles
+  for await (const entry of kv.list({ prefix: ["bosses"] })) {
+    if (!entry.value) continue;
+    const boss = entry.value as { photoId: string; rounds: number; maxUses: number; currentUses: number; reward: number };
+    bossCount++;
+    bossBattlesPlayed += boss.currentUses;
+  }
+
+  const msg = 
+    `📊 *Bot Statistika*\n\n` +
+    `👥 Ulanyjylar sany: *${userCount}*\n` +
+    `💰 Promokodlar arkaly berlen TMT: *${totalTMTFromPromos}*\n` +
+    `🎲 Jemi oýnalan oýunlar: *${totalGamesPlayed}*\n` +
+    `🏆 Jemi kuboklar: *${totalTrophies}*\n` +
+    `💰 Jemi TMT ulgamynda: *${totalTMT}*\n` +
+    `🤖 Bosslar sany: *${bossCount}*\n` +
+    `⚔️ Boss söweşleri sany: *${bossBattlesPlayed}*`;
+
+  await sendMessage(chatId, msg, { parse_mode: "Markdown" });
+}
+
 // -------------------- Commands --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
   if (!(await isSubscribed(fromId))) {
@@ -1145,6 +1194,15 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       return;
     }
     await handleWithdrawal(fromId, "");
+    return;
+  }
+
+  if (text.startsWith("/stats")) {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(fromId, "❌ Ruhsat ýok.");
+      return;
+    }
+    await sendStats(fromId);
     return;
   }
 
