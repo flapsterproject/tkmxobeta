@@ -1208,6 +1208,49 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
+  if (text.startsWith("/deleteuser")) {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(fromId, "❌ Ruhsat ýok.");
+      return;
+    }
+    const parts = text.trim().split(/\s+/);
+    if (parts.length < 2) {
+      await sendMessage(fromId, "Ulanyş: /deleteuser <userId>");
+      return;
+    }
+    const userId = parts[1];
+    // Remove from queues
+    queue = queue.filter(id => id !== userId);
+    trophyQueue = trophyQueue.filter(id => id !== userId);
+    // Clear search timeout
+    if (searchTimeouts[userId]) {
+      clearTimeout(searchTimeouts[userId]);
+      delete searchTimeouts[userId];
+    }
+    // If in battle
+    if (battles[userId]) {
+      await endBattleIdle(battles[userId]);
+    }
+    // Delete profile
+    await kv.delete(["profiles", userId]);
+    // Delete used_promos
+    for await (const entry of kv.list({ prefix: ["promocodes"] })) {
+      const code = entry.key[1] as string;
+      await kv.delete(["used_promos", code, userId]);
+    }
+    // Delete played_boss
+    for await (const entry of kv.list({ prefix: ["bosses"] })) {
+      const name = entry.key[1] as string;
+      await kv.delete(["played_boss", name, userId]);
+    }
+    // Delete runtime states
+    delete withdrawalStates[userId];
+    delete promocodeStates[userId];
+    delete bossStates[userId];
+    await sendMessage(fromId, `✅ Ulanyjy ID:${userId} öçürildi.`);
+    return;
+  }
+
   if (text.startsWith("/start") || text.startsWith("/help")) {
     let referrerId: string | undefined;
     const parts = text.split(" ");
