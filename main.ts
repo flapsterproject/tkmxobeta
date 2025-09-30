@@ -1,22 +1,21 @@
 // main.ts
 // Telegram Tic-Tac-Toe Bot (Deno) - Fixed, Patched & Improved
-// - Inline navigation main menu (delete previous menu and create "touched" section)
-// - Require subscription to @TkmXO for actions (except /start, /help, admin createpromocode)
-// - Promocode system: /createpromocode <name> <amount> (admin), /promocode (user flow)
-// - Improved callback handling (passes message id/chat id), small bugfixes
+// - Inline navigation buttons for main sections
+// - Require subscription to @TkmXO for actions (except allowed admin/start/help flows)
+// - Promocode system: /createpromocode <name> <count> (admin) & /promocode flow for users
+// - Various bug fixes and KV-safe operations
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/tkmxo"; // webhook path
-const REQUIRED_CHANNEL = "@TkmXO"; // channel to require subscription
+const SECRET_PATH = "/tkmxo"; // make sure webhook path matches
+const CHANNEL_USERNAME = "@TkmXO"; // channel users must subscribe to
+const ADMIN_USERNAME = "Masakoff"; // admin Telegram username (without @)
 
 // Deno KV
 const kv = await Deno.openKv();
-
-const ADMIN_USERNAME = "@Masakoff"; // admin username (with @)
 
 // runtime storages
 let queue: string[] = [];
@@ -25,18 +24,23 @@ const battles: Record<string, any> = {};
 const searchTimeouts: Record<string, number> = {};
 const withdrawalStates: Record<string, { amount: number; step: "amount" | "phone" }> = {};
 const globalMessageStates: Record<string, boolean> = {};
-const promocodeStates: Record<string, boolean> = {};
+const pendingPromoStates: Record<string, boolean> = {}; // waiting for user to send promocode text
 
 // -------------------- Telegram helpers --------------------
-async function sendMessage(chatId: string | number, text: string, options: any = {}) {
+async function api(method: string, body: any) {
+  const res = await fetch(`${API}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
   try {
     const body: any = { chat_id: chatId, text, ...options };
-    const res = await fetch(`${API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return (await res.json()).result?.message_id ?? null;
+    const data = await api("sendMessage", body);
+    return data.result?.message_id ?? null;
   } catch (e) {
     console.error("sendMessage error", e);
     return null;
@@ -46,7 +50,7 @@ async function sendMessage(chatId: string | number, text: string, options: any =
 async function editMessageText(chatId: string | number, messageId: number, text: string, options: any = {}) {
   try {
     const body = { chat_id: chatId, message_id: messageId, text, ...options };
-    await fetch(`${API}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await api("editMessageText", body);
   } catch (e) {
     console.warn("editMessageText failed", e?.message ?? e);
   }
@@ -54,38 +58,29 @@ async function editMessageText(chatId: string | number, messageId: number, text:
 
 async function answerCallbackQuery(id: string, text = "", showAlert = false) {
   try {
-    await fetch(`${API}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ callback_query_id: id, text, show_alert: showAlert }) });
+    await api("answerCallbackQuery", { callback_query_id: id, text, show_alert: showAlert });
   } catch (e) {
     console.warn("answerCallbackQuery failed", e?.message ?? e);
   }
 }
 
-async function deleteMessage(chatId: string | number, messageId: number) {
+// Check if a user is subscribed to the channel
+async function isSubscribed(userId: string): Promise<boolean> {
   try {
-    await fetch(`${API}/deleteMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, message_id: messageId }) });
-  } catch (e) {
-    console.warn("deleteMessage failed", e?.message ?? e);
-  }
-}
-
-// Check user subscription to REQUIRED_CHANNEL
-async function isSubscribed(userId: string) {
-  try {
-    // getChatMember requires bot to be able to query that channel; channel must be public
-    const res = await fetch(`${API}/getChatMember?chat_id=${encodeURIComponent(REQUIRED_CHANNEL)}&user_id=${encodeURIComponent(userId)}`);
-    const j = await res.json();
-    if (!j || !j.result) return false;
-    const status = j.result.status;
-    return status === "creator" || status === "administrator" || status === "member";
+    const res = await fetch(`${API}/getChatMember?chat_id=${encodeURIComponent(CHANNEL_USERNAME)}&user_id=${userId}`);
+    const data = await res.json();
+    if (!data.ok) return false;
+    const status = data.result?.status;
+    if (status === "left" || status === "kicked") return false;
+    return true;
   } catch (e) {
     console.warn("isSubscribed check failed", e);
-    // if we can't check, conservative approach: require subscription by returning false
+    // if check fails, default to false to be safe
     return false;
   }
 }
 
 // -------------------- Profile helpers --------------------
-
 type Profile = {
   id: string;
   username?: string;
@@ -147,10 +142,9 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
   const existing = (await getProfile(userId)) || (await initProfile(userId));
   const newProfile: Profile = {
     ...existing,
-    username: delta.username ?? existing.username,
-    displayName: delta.displayName ?? existing.displayName,
+    username: (delta as any).username ?? existing.username,
+    displayName: (delta as any).displayName ?? existing.displayName,
     trophies: Math.max(0, (existing.trophies || 0) + (delta.trophies ?? 0)),
-    // allow decimals for tmt
     tmt: Math.max(0, (existing.tmt || 0) + (delta.tmt ?? 0)),
     gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
     wins: (existing.wins || 0) + (delta.wins ?? 0),
@@ -233,8 +227,11 @@ async function sendLeaderboard(chatId: string, page = 0) {
   await sendMessage(chatId, msg, { reply_markup: keyboard, parse_mode: "Markdown" });
 }
 
-// -------------------- Game logic (unchanged, minor fixes) --------------------
-function createEmptyBoard(): string[] { return Array(9).fill(""); }
+// -------------------- Game logic --------------------
+function createEmptyBoard(): string[] {
+  return Array(9).fill("");
+}
+
 function boardToText(board: string[]) {
   const map: any = { "": "▫️", X: "❌", O: "⭕" };
   let text = "\n";
@@ -243,6 +240,7 @@ function boardToText(board: string[]) {
   }
   return text;
 }
+
 function checkWin(board: string[]) {
   const lines = [
     [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -257,6 +255,7 @@ function checkWin(board: string[]) {
   if (board.every((c) => c !== "")) return { winner: "draw" };
   return null;
 }
+
 function makeInlineKeyboard(board: string[], disabled = false) {
   const keyboard: any[] = [];
   for (let r = 0; r < 3; r++) {
@@ -274,10 +273,16 @@ function makeInlineKeyboard(board: string[], disabled = false) {
   return { inline_keyboard: keyboard };
 }
 
-// -------------------- Battle control (mostly unchanged) --------------------
+// -------------------- Battle control --------------------
 async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = false) {
-  if (searchTimeouts[p1]) { clearTimeout(searchTimeouts[p1]); delete searchTimeouts[p1]; }
-  if (searchTimeouts[p2]) { clearTimeout(searchTimeouts[p2]); delete searchTimeouts[p2]; }
+  if (searchTimeouts[p1]) {
+    clearTimeout(searchTimeouts[p1]);
+    delete searchTimeouts[p1];
+  }
+  if (searchTimeouts[p2]) {
+    clearTimeout(searchTimeouts[p2]);
+    delete searchTimeouts[p2];
+  }
 
   const battle = {
     players: [p1, p2],
@@ -291,11 +296,13 @@ async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = fal
     roundWins: { [p1]: 0, [p2]: 0 },
     isTrophyBattle: isTrophyBattle,
   };
-  battles[p1] = battle; battles[p2] = battle;
+  battles[p1] = battle;
+  battles[p2] = battle;
 
-  await initProfile(p1); await initProfile(p2);
+  await initProfile(p1);
+  await initProfile(p2);
 
-  const battleTypeText = isTrophyBattle ? "🏆 *Pul üçin oýun*" : "⚔️ *Kubok uchun oýun*";
+  const battleTypeText = isTrophyBattle ? "🏆 *Pul üçin oýun*" : "⚔️ *Kubok üçin oýun*";
   const stakeText = isTrophyBattle ? "\n\nGoýumlar: Iki oýunçy hem 1 TMT töwekgelçilige salýar. Ýeňiji +0.75 TMT alýar." : "";
 
   await sendMessage(p1, `${battleTypeText}\n\nSen ❌ (X).${stakeText}\n\n*Oýun görnüşi:* 3 turdan ybarat vs ID:${p2}`, { parse_mode: "Markdown" });
@@ -313,12 +320,20 @@ function headerForPlayer(battle: any, player: string) {
 }
 
 async function endTurnIdle(battle: any) {
-  const loser = battle.turn; const winner = battle.players.find((p: string) => p !== loser)!;
+  const loser = battle.turn;
+  const winner = battle.players.find((p: string) => p !== loser)!;
+
   await sendMessage(loser, "⚠️ Herekede gijä galdyňyz. Siz tabşyrdyňyz.");
   await sendMessage(winner, "⚠️ Garşydaşyňyz herekede gijä galdy. Olar tabşyrdy. Siz ýeňdiňiz!");
 
-  if (battle.idleTimerId) { clearTimeout(battle.idleTimerId); delete battle.idleTimerId; }
-  if (battle.moveTimerId) { clearTimeout(battle.moveTimerId); delete battle.moveTimerId; }
+  if (battle.idleTimerId) {
+    clearTimeout(battle.idleTimerId);
+    delete battle.idleTimerId;
+  }
+  if (battle.moveTimerId) {
+    clearTimeout(battle.moveTimerId);
+    delete battle.moveTimerId;
+  }
 
   await finishMatch(battle, { winner: winner, loser: loser });
 }
@@ -331,23 +346,27 @@ async function sendRoundStart(battle: any) {
       `${header}\n\n` +
       `*Tur ${battle.round}/3*\n` +
       `📊 Bal: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n` +
-      `🎲 Hereket: ${yourTurn ? "*Seniň hereketiň" : "Garşydaşyň hereketi"}\n` +
+      `🎲 Hereket: ${yourTurn ? "*Seniň hereketiň*" : "Garşydaşyň hereketi"}\n` +
       boardToText(battle.board);
     const msgId = await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
     if (msgId) battle.messageIds[player] = msgId;
   }
 
-  if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
-  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
+  if (battle.idleTimerId) {
+    clearTimeout(battle.idleTimerId);
+  }
+  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000) as unknown as number; // 5 minutes
 
-  if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
-  battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000);
+  if (battle.moveTimerId) {
+    clearTimeout(battle.moveTimerId);
+  }
+  battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000) as unknown as number; // 1 minute
 }
 
 async function endBattleIdle(battle: any) {
   const [p1, p2] = battle.players;
-  await sendMessage(p1, "⚠️ Oýun hereketsizlik sebäpli tamamlandy (5 minut).", { parse_mode: "Markdown" });
-  await sendMessage(p2, "⚠️ Oýun hereketsizlik sebäpli tamamlandy (5 minut).", { parse_mode: "Markdown" });
+  await sendMessage(p1, "⚠️ Oýun hereketsiz tamamlandy (5 minut).", { parse_mode: "Markdown" });
+  await sendMessage(p2, "⚠️ Oýun hereketsiz tamamlandy (5 minut).", { parse_mode: "Markdown" });
 
   if (battle.isTrophyBattle) {
     await updateProfile(p1, { tmt: 1 });
@@ -356,13 +375,20 @@ async function endBattleIdle(battle: any) {
     await sendMessage(p2, "💸 Hereketsiz oýun üçin size 1 TMT yzyna gaýtaryldy.");
   }
 
-  delete battles[p1]; delete battles[p2];
+  delete battles[p1];
+  delete battles[p2];
 }
 
 async function finishMatch(battle: any, result: { winner?: string; loser?: string; draw?: boolean }) {
   try {
-    if (battle.idleTimerId) { clearTimeout(battle.idleTimerId); delete battle.idleTimerId; }
-    if (battle.moveTimerId) { clearTimeout(battle.moveTimerId); delete battle.moveTimerId; }
+    if (battle.idleTimerId) {
+      clearTimeout(battle.idleTimerId);
+      delete battle.idleTimerId;
+    }
+    if (battle.moveTimerId) {
+      clearTimeout(battle.moveTimerId);
+      delete battle.moveTimerId;
+    }
     const [p1, p2] = battle.players;
 
     for (const player of battle.players) {
@@ -396,8 +422,10 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
         await sendMessage(p2, "💸 Deňlik üçin size 1 TMT yzyna gaýtaryldy.");
       }
     } else if (result.winner) {
-      const winner = result.winner!; const loser = result.loser!;
-      await initProfile(winner); await initProfile(loser);
+      const winner = result.winner!;
+      const loser = result.loser!;
+      await initProfile(winner);
+      await initProfile(loser);
 
       await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: 1 });
       await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: -1 });
@@ -405,6 +433,7 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
       await sendMessage(loser, `😢 Siz oýunda utuldyňyz.\n🏆 *-1 kubok* (vs ID:${winner})`, { parse_mode: "Markdown" });
 
       if (battle.isTrophyBattle) {
+        // Winner +0.75, loser -1
         await updateProfile(winner, { tmt: 1.75 });
         await updateProfile(loser, { tmt: -0 });
         await sendMessage(winner, "🏆 TMT + Kubok oýunda ýeňeniňiz üçin 0.75 TMT aldyňyz!");
@@ -412,44 +441,57 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
       }
     }
 
-    delete battles[p1]; delete battles[p2];
+    delete battles[p1];
+    delete battles[p2];
   } catch (err) {
     console.error("finishMatch error:", err);
   }
 }
 
 // -------------------- Promocode helpers --------------------
-async function createPromoCode(codeName: string, count: number) {
-  await kv.set(["promocodes", codeName.toLowerCase()], { remaining: count });
+async function createPromo(code: string, amount: number, creatorId: string) {
+  const key = ["promocodes", code.toLowerCase()];
+  await kv.set(key, { remaining: amount, creator: creatorId });
 }
-async function getPromoCode(codeName: string) {
-  const res = await kv.get(["promocodes", codeName.toLowerCase()]);
-  return res.value as { remaining: number } | null;
+
+async function getPromo(code: string) {
+  const res = await kv.get(["promocodes", code.toLowerCase()]);
+  return res.value as { remaining: number; creator?: string } | null;
 }
-async function usePromoCode(codeName: string, userId: string) {
-  const key = ["promocodes", codeName.toLowerCase()];
+
+async function usePromo(code: string, userId: string) {
+  const key = ["promocodes", code.toLowerCase()];
   const res = await kv.get(key);
-  if (!res.value) return { ok: false, reason: "not_exist" };
-  const data = res.value as { remaining: number };
-  if ((data.remaining || 0) <= 0) return { ok: false, reason: "out" };
-
-  // check used
-  const used = (await kv.get(["used_promocodes", userId, codeName.toLowerCase()])).value;
-  if (used) return { ok: false, reason: "already" };
-
+  if (!res.value) return { ok: false, reason: "no_code" };
+  const promo = res.value as { remaining: number; creator?: string };
+  if (promo.remaining <= 0) return { ok: false, reason: "empty" };
+  // check if user already used
+  const usedKey = ["promo_used", code.toLowerCase(), userId];
+  const used = await kv.get(usedKey);
+  if (used.value) return { ok: false, reason: "already_used" };
   // decrement
-  data.remaining = (data.remaining || 0) - 1;
-  await kv.set(key, data);
-  await kv.set(["used_promocodes", userId, codeName.toLowerCase()], true);
+  promo.remaining = promo.remaining - 1;
+  await kv.set(key, promo);
+  await kv.set(usedKey, true);
   return { ok: true };
 }
 
 // -------------------- Callback handler --------------------
-// Modified to accept callback message identifiers so we can delete the menu
-async function handleCallback(fromId: string, data: string | null, callbackId: string, cbChatId?: number | string, cbMessageId?: number) {
-  if (!data) { await answerCallbackQuery(callbackId); return; }
+async function handleCallback(fromId: string, data: string | null, callbackId: string) {
+  if (!data) {
+    await answerCallbackQuery(callbackId);
+    return;
+  }
   try {
-    // leaderboard pagination
+    // ensure subscriber for interactions that are not noop/leaderboard
+    if (!data.startsWith("noop") && !data.startsWith("leaderboard:")) {
+      const subscribed = await isSubscribed(fromId);
+      if (!subscribed) {
+        await answerCallbackQuery(callbackId, `Please subscribe to ${CHANNEL_USERNAME} to use bot features.`, true);
+        return;
+      }
+    }
+
     if (data.startsWith("leaderboard:")) {
       const page = parseInt(data.split(":")[1]) || 0;
       await sendLeaderboard(fromId, page);
@@ -457,32 +499,40 @@ async function handleCallback(fromId: string, data: string | null, callbackId: s
       return;
     }
 
-    if (data === "noop") { await answerCallbackQuery(callbackId); return; }
-
-    // Menu navigation actions: delete menu and send section message
-    if (data.startsWith("menu:")) {
-      const section = data.split(":")[1] || "";
-      if (cbChatId && cbMessageId) {
-        await deleteMessage(cbChatId, cbMessageId);
-      }
-      const sectionText = `🧭 Section: *${section}*\n(touched to inline button)`;
-      const keyboard = { inline_keyboard: [[{ text: "🔙 Back to menu", callback_data: "menu:main" }]] };
-      await sendMessage(fromId, sectionText, { parse_mode: "Markdown", reply_markup: keyboard });
+    if (data === "noop") {
       await answerCallbackQuery(callbackId);
       return;
     }
 
-    // if the user is in a battle, use game handlers (we keep using fromId to find battles)
-    const battle = battles[fromId];
-
-    if (!battle) {
-      if (data === "surrender") { await answerCallbackQuery(callbackId, "Siz oýunda dälsiňiz.", true); return; }
-      await answerCallbackQuery(callbackId); return;
+    // inline navigation handling: nav:<section>
+    if (data.startsWith("nav:")) {
+      const section = data.split(":")[1] || "menu";
+      // edit the message to indicate touched section (delete previous content by replacing text)
+      // We don't have message id here, so just answer and send a small message
+      await answerCallbackQuery(callbackId, `Touched to inline button: ${section}`);
+      await sendMessage(fromId, `Touched to inline button: ${section}`);
+      return;
     }
 
-    // Reset timers
-    if (battle.idleTimerId) { clearTimeout(battle.idleTimerId); battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000); }
-    if (battle.moveTimerId) { clearTimeout(battle.moveTimerId); battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000); }
+    const battle = battles[fromId];
+    if (!battle) {
+      if (data === "surrender") {
+        await answerCallbackQuery(callbackId, "Siz oýunda dälsiňiz.", true);
+        return;
+      }
+      await answerCallbackQuery(callbackId);
+      return;
+    }
+
+    // Reset idle & move timers
+    if (battle.idleTimerId) {
+      clearTimeout(battle.idleTimerId);
+      battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000) as unknown as number;
+    }
+    if (battle.moveTimerId) {
+      clearTimeout(battle.moveTimerId);
+      battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000) as unknown as number;
+    }
 
     if (data === "surrender") {
       const opponent = battle.players.find((p: string) => p !== fromId)!;
@@ -493,12 +543,24 @@ async function handleCallback(fromId: string, data: string | null, callbackId: s
       return;
     }
 
-    if (!data.startsWith("hereket:")) { await answerCallbackQuery(callbackId); return; }
+    if (!data.startsWith("hereket:")) {
+      await answerCallbackQuery(callbackId);
+      return;
+    }
 
     const idx = parseInt(data.split(":")[1]);
-    if (isNaN(idx) || idx < 0 || idx > 8) { await answerCallbackQuery(callbackId, "Nädogry hereket.", true); return; }
-    if (battle.turn !== fromId) { await answerCallbackQuery(callbackId, "Siziň herekediňiz däl.", true); return; }
-    if (battle.board[idx] !== "") { await answerCallbackQuery(callbackId, "Bu öýjük eýýäm eýelenipdi.", true); return; }
+    if (isNaN(idx) || idx < 0 || idx > 8) {
+      await answerCallbackQuery(callbackId, "Nädogry hereket.", true);
+      return;
+    }
+    if (battle.turn !== fromId) {
+      await answerCallbackQuery(callbackId, "Siziň herekediňiz däl.", true);
+      return;
+    }
+    if (battle.board[idx] !== "") {
+      await answerCallbackQuery(callbackId, "Bu öýjük eýýäm eýelenipdi.", true);
+      return;
+    }
 
     const mark = battle.marks[fromId];
     battle.board[idx] = mark;
@@ -513,8 +575,11 @@ async function handleCallback(fromId: string, data: string | null, callbackId: s
       }
 
       let boardText = boardToText(battle.board);
-      if (line) boardText += `\n🎉 *Line:* ${line.map((i: number) => i + 1).join("-")}`;
-      else if (winner === "draw") boardText += `\n🤝 *Deňe-deň boldy!*`;
+      if (line) {
+        boardText += `\n🎉 *Line:* ${line.map((i: number) => i + 1).join("-")}`;
+      } else if (winner === "draw") {
+        boardText += `\n🤝 *Deňe-deň boldy!*`;
+      }
 
       for (const player of battle.players) {
         const msgId = battle.messageIds[player];
@@ -527,6 +592,7 @@ async function handleCallback(fromId: string, data: string | null, callbackId: s
         else await sendMessage(player, text, { parse_mode: "Markdown" });
       }
 
+      // Check if match is over (best of 3)
       if (battle.roundWins[battle.players[0]] === 2 || battle.roundWins[battle.players[1]] === 2 || battle.round === 3) {
         if (battle.roundWins[battle.players[0]] > battle.roundWins[battle.players[1]]) {
           await finishMatch(battle, { winner: battle.players[0], loser: battle.players[1] });
@@ -545,14 +611,14 @@ async function handleCallback(fromId: string, data: string | null, callbackId: s
       battle.turn = battle.players[(battle.round - 1) % 2];
 
       if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
-      battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000);
+      battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000) as unknown as number;
 
       await sendRoundStart(battle);
       await answerCallbackQuery(callbackId, "Hereket edildi!");
       return;
     }
 
-    // Continue game
+    // Continue game if no win/draw
     battle.turn = battle.players.find((p: string) => p !== fromId)!;
     for (const player of battle.players) {
       const header = headerForPlayer(battle, player);
@@ -598,17 +664,28 @@ async function handleWithdrawal(fromId: string, text: string) {
       return;
     } else if (state.step === "phone") {
       const phoneNumber = text.trim();
-      if (phoneNumber.length < 5) { await sendMessage(fromId, "❌ Hakyky telefon belgini giriziň."); return; }
+      if (phoneNumber.length < 5) {
+        await sendMessage(fromId, "❌ Hakyky telefon belgini giriziň.");
+        return;
+      }
 
-      const amount = state.amount; const profile = await getProfile(fromId);
-      if (!profile || profile.tmt < amount) { await sendMessage(fromId, "❌ Näsazlyk: Balans ýeterlik däl. Täzeden synanyşyň."); delete withdrawalStates[fromId]; return; }
+      const amount = state.amount;
+      const profile = await getProfile(fromId);
+      if (!profile || profile.tmt < amount) {
+        await sendMessage(fromId, "❌ Näsazlyk: Balans ýeterlik däl. Täzeden synanyşyň.");
+        delete withdrawalStates[fromId];
+        return;
+      }
 
       try {
         await updateProfile(fromId, { tmt: -amount });
 
-        await sendMessage(fromId, `✅ Çykarma soragy üstünlikli iberildi!\n\nMukdar: ${amount} TMT\nTelefon nomer: ${phoneNumber}\n\nSiziň soragyňyz işlenýär.`);
+        await sendMessage(
+          fromId,
+          `✅ Çykarma soragy üstünlikli iberildi!\n\nMukdar: ${amount} TMT\nTelefon nomer: ${phoneNumber}\n\nSiziň soragyňyz işlenýär.`,
+        );
 
-        const adminProfile = await getProfileByUsername(ADMIN_USERNAME.replace("@", ""));
+        const adminProfile = await getProfileByUsername(ADMIN_USERNAME);
         const adminId = adminProfile?.id || ADMIN_USERNAME;
         const userDisplayName = profile.displayName || `ID:${fromId}`;
         const adminMessage = `💰 *WITHDRAWAL REQUEST*\n\nUser: ${userDisplayName} (ID: ${fromId})\nAmount: ${amount} TMT\nPhone: ${phoneNumber}\n\nPlease process this withdrawal manually.`;
@@ -637,35 +714,223 @@ async function getProfileByUsername(username: string): Promise<Profile | null> {
       if (!profile) continue;
       if (profile.username === username) return profile;
     }
-  } catch (e) { console.error("getProfileByUsername kv.list error", e); }
+  } catch (e) {
+    console.error("getProfileByUsername kv.list error", e);
+  }
   return null;
-}
-
-// -------------------- Menu helpers --------------------
-function mainMenuKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: "👤 Profile", callback_data: "menu:profile" },
-        { text: "🏆 Leaderboard", callback_data: "menu:leaderboard" }
-      ],
-      [
-        { text: "⚔️ Battle", callback_data: "menu:battle" },
-        { text: "🏅 RealBattle", callback_data: "menu:realbattle" }
-      ],
-      [
-        { text: "💸 Withdraw", callback_data: "menu:withdraw" },
-        { text: "🎟️ Promocode", callback_data: "menu:promocode" }
-      ]
-    ]
-  };
 }
 
 // -------------------- Commands --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
-  const uid = fromId;
-  // allow /start and /help without subscription
+  // Allowed commands without subscription (public/admin)
+  const allowedNoSub = ["/start", "/help", "/createpromocode", "/addtouser", "/globalmessage"];
+  const cmd = text.split(" ")[0];
+
+  if (!allowedNoSub.includes(cmd)) {
+    const subscribed = await isSubscribed(fromId);
+    if (!subscribed) {
+      // ask to subscribe with inline button
+      const keyboard = { inline_keyboard: [[{ text: "📣 Subscribe to channel", url: `https://t.me/${CHANNEL_USERNAME.replace("@", "")}` }]] };
+      await sendMessage(fromId, `❗ To use this command you must subscribe to ${CHANNEL_USERNAME}.`, { reply_markup: keyboard });
+      return;
+    }
+  }
+
+  // handle /battle
+  if (text.startsWith("/battle")) {
+    if (queue.includes(fromId)) {
+      await sendMessage(fromId, "Siz eýýäm oýun nobatynda dursyňyz. Garşydaşyňyza garaşyň.");
+      return;
+    }
+    if (battles[fromId]) {
+      await sendMessage(fromId, "Siz eýýäm oýunda. Ilki häzirki oýunyňyzy tamamlaň.");
+      return;
+    }
+    queue.push(fromId);
+    await sendMessage(fromId, "🔍 Garşydaş gözlenýär…");
+
+    searchTimeouts[fromId] = setTimeout(async () => {
+      const index = queue.indexOf(fromId);
+      if (index !== -1) {
+        queue.splice(index, 1);
+        delete searchTimeouts[fromId];
+        await sendMessage(fromId, "⏱️ Gözleg 30 sekuntdan soň togtadyldy. Garşydaş tapylmady.");
+      }
+    }, 30_000) as unknown as number;
+
+    if (queue.length >= 2) {
+      const [p1, p2] = queue.splice(0, 2);
+      if (searchTimeouts[p1]) {
+        clearTimeout(searchTimeouts[p1]);
+        delete searchTimeouts[p1];
+      }
+      if (searchTimeouts[p2]) {
+        clearTimeout(searchTimeouts[p2]);
+        delete searchTimeouts[p2];
+      }
+      await startBattle(p1, p2);
+    }
+    return;
+  }
+
+  if (text.startsWith("/realbattle")) {
+    const profile = await getProfile(fromId);
+    if (!profile || profile.tmt < 1) {
+      await sendMessage(fromId, "❌ TMT + Kubok oýna girmek üçin iň az 1 TMT gerek.Balansyňyzy doldurmak üçin 👉 @Masakoff");
+      return;
+    }
+
+    if (trophyQueue.includes(fromId)) {
+      await sendMessage(fromId, "Siz eýýäm Kubokly oýun nobatynda dursyňyz. Garşydaşyňyza garaşyň.");
+      return;
+    }
+    if (battles[fromId]) {
+      await sendMessage(fromId, "Siz eýýäm bir oýunda. Ilki häzirki oýunyňy tamamlaň.");
+      return;
+    }
+
+    // Reserve 1 TMT immediately
+    await updateProfile(fromId, { tmt: -1 });
+    trophyQueue.push(fromId);
+    await sendMessage(fromId, "🔍 Kubokly duşuşyk üçin garşydaş gözlenýär...\n(Bu oýun üçin 1 TMT saklanyldy)");
+
+    searchTimeouts[fromId] = setTimeout(async () => {
+      const index = trophyQueue.indexOf(fromId);
+      if (index !== -1) {
+        trophyQueue.splice(index, 1);
+        delete searchTimeouts[fromId];
+        await updateProfile(fromId, { tmt: 1 });
+        await sendMessage(fromId, "⏱️ Gözleg 30 sekuntdan soň togtadyldy. Garşydaş tapylmady. 1 TMT yzyna gaýtaryldy.");
+      }
+    }, 30_000) as unknown as number;
+
+    if (trophyQueue.length >= 2) {
+      const [p1, p2] = trophyQueue.splice(0, 2);
+      if (searchTimeouts[p1]) {
+        clearTimeout(searchTimeouts[p1]);
+        delete searchTimeouts[p1];
+      }
+      if (searchTimeouts[p2]) {
+        clearTimeout(searchTimeouts[p2]);
+        delete searchTimeouts[p2];
+      }
+      // Deduct reserve for second player now (we reserved first earlier)
+      await updateProfile(p2, { tmt: -1 });
+      await startBattle(p1, p2, true);
+    }
+    return;
+  }
+
+  if (text.startsWith("/profile")) {
+    await sendProfile(fromId);
+    return;
+  }
+
+  if (text.startsWith("/leaderboard")) {
+    await sendLeaderboard(fromId, 0);
+    return;
+  }
+
+  if (text.startsWith("/addtouser")) {
+    // Only allow admin username
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(fromId, "❌ Unauthorized.");
+      return;
+    }
+    const parts = text.trim().split(/\s+/);
+    if (parts.length < 4) {
+      await sendMessage(fromId, "Usage: `/addtouser tmt <userId> <amount>` or `/addtouser trophies <userId> <amount>`", { parse_mode: "Markdown" });
+      return;
+    }
+
+    const type = parts[1];
+    const userId = parts[2];
+    const amount = parseFloat(parts[3]);
+
+    if (isNaN(amount)) {
+      await sendMessage(fromId, "Invalid amount value. Please provide a number.");
+      return;
+    }
+
+    if (type === "tmt") {
+      await updateProfile(userId, { tmt: amount });
+      await sendMessage(fromId, `✅ Added ${amount} TMT to ID:${userId}`);
+    } else if (type === "trophies") {
+      await updateProfile(userId, { trophies: amount });
+      await sendMessage(fromId, `✅ Added ${amount} trophies to ID:${userId}`);
+    } else {
+      await sendMessage(fromId, "Invalid type. Use 'tmt' or 'trophies'.");
+    }
+    return;
+  }
+
+  // Handle admin /globalmessage command
+  if (text.startsWith("/globalmessage")) {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(fromId, "❌ Unauthorized.");
+      return;
+    }
+    globalMessageStates[fromId] = true;
+    await sendMessage(fromId, "✏️ Write your global message:");
+    return;
+  }
+
+  if (text.startsWith("/withdraw")) {
+    const profile = await getProfile(fromId);
+    if (!profile) {
+      await sendMessage(fromId, "❌ TMT çykarmak üçin profil gerek. Ilki oýna başla!");
+      return;
+    }
+    await handleWithdrawal(fromId, "");
+    return;
+  }
+
+  // PROMOCODE: admin creates /createpromocode <name> <count>
+  if (text.startsWith("/createpromocode")) {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(fromId, "❌ Unauthorized.");
+      return;
+    }
+    const parts = text.trim().split(/\s+/);
+    if (parts.length < 3) {
+      await sendMessage(fromId, "Usage: /createpromocode <code> <count>");
+      return;
+    }
+    const code = parts[1];
+    const count = parseInt(parts[2]);
+    if (!code || isNaN(count) || count <= 0) {
+      await sendMessage(fromId, "Invalid parameters. Example: /createpromocode SPRING2025 50");
+      return;
+    }
+    await createPromo(code, count, fromId);
+    await sendMessage(fromId, `✅ Promocode ${code} created with ${count} usages.`);
+    return;
+  }
+
+  // User starts promocode flow: /promocode
+  if (text.startsWith("/promocode")) {
+    await sendMessage(fromId, "✏️ Please send the promocode you want to activate (case-insensitive):");
+    pendingPromoStates[fromId] = true;
+    return;
+  }
+
   if (text.startsWith("/start") || text.startsWith("/help")) {
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: "🔹 Battle", callback_data: "nav:battle" },
+          { text: "⚔️ RealBattle", callback_data: "nav:realbattle" }
+        ],
+        [
+          { text: "👤 Profile", callback_data: "nav:profile" },
+          { text: "🏆 Leaderboard", callback_data: "nav:leaderboard" }
+        ],
+        [
+          { text: "💰 Withdraw", callback_data: "nav:withdraw" }
+        ]
+      ]
+    };
+
     const helpText =
       `🎮 *TkmXO Bot-a hoş geldiňiz!*\n\n` +
       `Aşakdaky buýruklary ulanyň:\n` +
@@ -673,136 +938,51 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       `🔹 /realbattle - TMT + Kubok duşyk (1 TMT goýum talap edýär).\n` +
       `🔹 /profile - Statistikalaryňy we derejäňizi gör.\n` +
       `🔹 /leaderboard - Iň ýokary oýunçylary gör.\n` +
-      `🔹 /withdraw - TMT balansyňy çykarmak.\n` +
-      `🔹 /promocode - Aktiwleştirmek üçin promo kody giriziň.\n\n` +
-      `Also you can use inline menu below.`;
-    const msgId = await sendMessage(uid, helpText, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
+      `🔹 /withdraw - TMT balansyňy çykarmak.\n\n` +
+      `Üstünlik arzuw edýärin we oýundan lezzet alyň!`;
+    await sendMessage(fromId, helpText, { parse_mode: "Markdown", reply_markup: keyboard });
     return;
   }
 
-  // Admin create promocode allowed without subscription
-  if (text.startsWith("/createpromocode")) {
-    if (username !== ADMIN_USERNAME.replace("@", "")) { await sendMessage(uid, "❌ Unauthorized."); return; }
-    const parts = text.trim().split(/\s+/);
-    if (parts.length < 3) { await sendMessage(uid, "Usage: /createpromocode <name> <count>"); return; }
-    const code = parts[1]; const count = parseInt(parts[2]);
-    if (isNaN(count) || count <= 0) { await sendMessage(uid, "Count must be positive integer."); return; }
-    await createPromoCode(code, count);
-    await sendMessage(uid, `✅ Promocode ${code} created with ${count} uses.`);
+  // Handle ongoing withdrawal text input
+  if (withdrawalStates[fromId]) {
+    await handleWithdrawal(fromId, text);
     return;
   }
 
-  // For most actions ensure subscription
-  if (!(text.startsWith("/createpromocode") || text.startsWith("/start") || text.startsWith("/help"))) {
-    const ok = await isSubscribed(uid);
-    if (!ok) {
-      await sendMessage(uid, `❗️ Please subscribe to ${REQUIRED_CHANNEL} to use the bot.`);
-      return;
-    }
-  }
-
-  if (text.startsWith("/battle")) {
-    if (queue.includes(uid)) { await sendMessage(uid, "Siz eýýäm oýun nobatynda dursyňyz. Garşydaşyňyza garaşyň."); return; }
-    if (battles[uid]) { await sendMessage(uid, "Siz eýýäm oýunda. Ilki häzirki oýunyňyzy tamamlaň."); return; }
-    queue.push(uid); await sendMessage(uid, "🔍 Garşydaş gözlenýär…");
-
-    searchTimeouts[uid] = setTimeout(async () => {
-      const index = queue.indexOf(uid);
-      if (index !== -1) { queue.splice(index, 1); delete searchTimeouts[uid]; await sendMessage(uid, "⏱️ Gözleg 30 sekuntdan soň togtadyldy. Garşydaş tapylmady."); }
-    }, 30_000) as unknown as number;
-
-    if (queue.length >= 2) {
-      const [p1, p2] = queue.splice(0, 2);
-      if (searchTimeouts[p1]) { clearTimeout(searchTimeouts[p1]); delete searchTimeouts[p1]; }
-      if (searchTimeouts[p2]) { clearTimeout(searchTimeouts[p2]); delete searchTimeouts[p2]; }
-      await startBattle(p1, p2);
-    }
-    return;
-  }
-
-  if (text.startsWith("/realbattle")) {
-    const profile = await getProfile(uid);
-    if (!profile || profile.tmt < 1) { await sendMessage(uid, "❌ TMT + Kubok oýna girmek üçin iň az 1 TMT gerek.Balansyňyzy doldurmak üçin 👉 @Masakoff"); return; }
-    if (trophyQueue.includes(uid)) { await sendMessage(uid, "Siz eýýäm Kubokly oýun nobatynda dursyňyz. Garşydaşyňyza garaşyň."); return; }
-    if (battles[uid]) { await sendMessage(uid, "Siz eýýäm bir oýunda. Ilki häzirki oýunyňy tamamlaň."); return; }
-
-    await updateProfile(uid, { tmt: -1 }); trophyQueue.push(uid);
-    await sendMessage(uid, "🔍 Kubokly duşuşyk üçin garşydaş gözlenýär...\n(Bu oýun üçin 1 TMT saklanyldy)");
-
-    searchTimeouts[uid] = setTimeout(async () => {
-      const index = trophyQueue.indexOf(uid);
-      if (index !== -1) { trophyQueue.splice(index, 1); delete searchTimeouts[uid]; await updateProfile(uid, { tmt: 1 }); await sendMessage(uid, "⏱️ Gözleg 30 sekuntdan soň togtadyldy. Garşydaş tapylmady. 1 TMT yzyna gaýtaryldy."); }
-    }, 30_000) as unknown as number;
-
-    if (trophyQueue.length >= 2) {
-      const [p1, p2] = trophyQueue.splice(0, 2);
-      if (searchTimeouts[p1]) { clearTimeout(searchTimeouts[p1]); delete searchTimeouts[p1]; }
-      if (searchTimeouts[p2]) { clearTimeout(searchTimeouts[p2]); delete searchTimeouts[p2]; }
-      await updateProfile(p2, { tmt: -1 }); await startBattle(p1, p2, true);
-    }
-    return;
-  }
-
-  if (text.startsWith("/profile")) { await sendProfile(uid); return; }
-  if (text.startsWith("/leaderboard")) { await sendLeaderboard(uid, 0); return; }
-
-  if (text.startsWith("/addtouser")) {
-    const adminNameWithoutAt = ADMIN_USERNAME.replace("@", "");
-    if (username !== adminNameWithoutAt) { await sendMessage(uid, "❌ Unauthorized."); return; }
-    const parts = text.trim().split(/\s+/);
-    if (parts.length < 4) { await sendMessage(uid, "Usage: `/addtouser tmt <userId> <amount>` or `/addtouser trophies <userId> <amount>`", { parse_mode: "Markdown" }); return; }
-    const type = parts[1]; const userId = parts[2]; const amount = parseFloat(parts[3]);
-    if (isNaN(amount)) { await sendMessage(uid, "Invalid amount value. Please provide a number."); return; }
-    if (type === "tmt") { await updateProfile(userId, { tmt: amount }); await sendMessage(uid, `✅ Added ${amount} TMT to ID:${userId}`); }
-    else if (type === "trophies") { await updateProfile(userId, { trophies: amount }); await sendMessage(uid, `✅ Added ${amount} trophies to ID:${userId}`); }
-    else { await sendMessage(uid, "Invalid type. Use 'tmt' or 'trophies'."); }
-    return;
-  }
-
-  if (text.startsWith("/globalmessage")) {
-    if (username !== ADMIN_USERNAME.replace("@", "")) { await sendMessage(uid, "❌ Unauthorized."); return; }
-    globalMessageStates[uid] = true; await sendMessage(uid, "✏️ Write your global message:"); return;
-  }
-
-  if (text.startsWith("/withdraw")) {
-    const profile = await getProfile(uid);
-    if (!profile) { await sendMessage(uid, "❌ TMT çykarmak üçin profil gerek. Ilki oýna başla!"); return; }
-    await handleWithdrawal(uid, ""); return;
-  }
-
-  if (text.startsWith("/promocode")) {
-    // ask user to send promocode string
-    await sendMessage(uid, "🔐 Please send the promocode you want to activate (case-insensitive).");
-    promocodeStates[uid] = true;
-    return;
-  }
-
-  // ongoing promocode state
-  if (promocodeStates[uid]) {
+  // Handle pending promocode input
+  if (pendingPromoStates[fromId]) {
     const code = text.trim().toLowerCase();
-    promocodeStates[uid] = false;
-    const promo = await getPromoCode(code);
-    if (!promo) { await sendMessage(uid, "❌ This promocode is not available."); return; }
-    // check used
-    const used = (await kv.get(["used_promocodes", uid, code])).value;
-    if (used) { await sendMessage(uid, "❌ You already used this promocode."); return; }
-    if ((promo.remaining || 0) <= 0) { await sendMessage(uid, "❌ This promocode has no remaining uses."); return; }
-    const res = await usePromoCode(code, uid);
-    if (!res.ok) {
-      if (res.reason === "already") await sendMessage(uid, "❌ You already used this promocode.");
-      else if (res.reason === "out") await sendMessage(uid, "❌ This promocode has no remaining uses.");
-      else await sendMessage(uid, "❌ Promocode not available.");
+    delete pendingPromoStates[fromId];
+    const promo = await getPromo(code);
+    if (!promo) {
+      await sendMessage(fromId, "❌ This promocode is not available or doesn't exist.");
       return;
     }
-    await updateProfile(uid, { tmt: 1 });
-    await sendMessage(uid, "✅ Promocode activated. You received +1 TMT!");
+    // check used
+    const usedKey = ["promo_used", code, fromId];
+    const used = await kv.get(usedKey);
+    if (used.value) {
+      await sendMessage(fromId, "❌ You already used this promocode.");
+      return;
+    }
+    if (promo.remaining <= 0) {
+      await sendMessage(fromId, "❌ This promocode has no remaining uses.");
+      return;
+    }
+    const res = await usePromo(code, fromId);
+    if (res.ok) {
+      await updateProfile(fromId, { tmt: 1 });
+      await sendMessage(fromId, "✅ Promocode activated! You received 1 TMT.");
+    } else {
+      if (res.reason === "already_used") await sendMessage(fromId, "❌ You already used this promocode.");
+      else if (res.reason === "empty") await sendMessage(fromId, "❌ This promocode has no remaining uses.");
+      else await sendMessage(fromId, "❌ This promocode is not available.");
+    }
     return;
   }
 
-  // ongoing withdrawal input
-  if (withdrawalStates[uid]) { await handleWithdrawal(uid, text); return; }
-
-  await sendMessage(uid, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
+  await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
 }
 
 // -------------------- Server / Webhook --------------------
@@ -826,33 +1006,57 @@ serve(async (req: Request) => {
       // Ensure profile exists
       await initProfile(fromId, username, displayName);
 
-      // Ignore messages if user is searching or in battle (don't block non-bot admin commands though)
+      // If user is mid-queue or in battle, ignore normal text messages (but return OK)
       if (queue.includes(fromId) || trophyQueue.includes(fromId) || battles[fromId]) {
         return new Response("OK");
       }
 
-      if (text.startsWith("/")) { await handleCommand(fromId, username, displayName, text); }
-      else if (globalMessageStates[fromId]) {
+      if (text.startsWith("/")) {
+        await handleCommand(fromId, username, displayName, text);
+      } else if (globalMessageStates[fromId]) {
+        // Admin is writing the global message
         globalMessageStates[fromId] = false;
+
+        // Broadcast to all users (iterate KV)
         for await (const entry of kv.list({ prefix: ["profiles"] })) {
           const profile = entry.value as Profile;
           if (!profile) continue;
           await sendMessage(profile.id, `📢 *Global Bildiriş:*\n\n${text}`, { parse_mode: "Markdown" });
         }
-        await sendMessage(fromId, "✅ Global message sent!");
-      } else if (withdrawalStates[fromId]) { await handleWithdrawal(fromId, text); }
-      else if (promocodeStates[fromId]) { await handleCommand(fromId, username, displayName, text); }
-      else { await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň."); }
 
+        await sendMessage(fromId, "✅ Global message sent!");
+      } else if (withdrawalStates[fromId]) {
+        await handleWithdrawal(fromId, text);
+      } else if (pendingPromoStates[fromId]) {
+        // handled inside handleCommand via pendingPromoStates; but also support here
+        const code = text.trim().toLowerCase();
+        delete pendingPromoStates[fromId];
+        const promo = await getPromo(code);
+        if (!promo) {
+          await sendMessage(fromId, "❌ This promocode is not available or doesn't exist.");
+        } else {
+          const usedKey = ["promo_used", code, fromId];
+          const used = await kv.get(usedKey);
+          if (used.value) {
+            await sendMessage(fromId, "❌ You already used this promocode.");
+          } else if (promo.remaining <= 0) {
+            await sendMessage(fromId, "❌ This promocode has no remaining uses.");
+          } else {
+            await usePromo(code, fromId);
+            await updateProfile(fromId, { tmt: 1 });
+            await sendMessage(fromId, "✅ Promocode activated! You received 1 TMT.");
+          }
+        }
+      } else {
+        await sendMessage(fromId, "❓ Näbelli buýruk. Buýruklaryň sanawyny görmek üçin /help ýazyň.");
+      }
     }
     // handle callback queries
     else if (update.callback_query) {
       const cb = update.callback_query;
       const fromId = String(cb.from.id);
       const data = cb.data ?? null;
-      const cbChatId = cb.message?.chat?.id;
-      const cbMsgId = cb.message?.message_id;
-      await handleCallback(fromId, data, cb.id, cbChatId, cbMsgId);
+      await handleCallback(fromId, data, cb.id);
     }
 
     return new Response("OK");
@@ -861,6 +1065,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
