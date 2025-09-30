@@ -116,6 +116,7 @@ type Profile = {
   losses: number;
   draws: number;
   lastActive: number;
+  referrals: number;
 };
 
 function getDisplayName(p: Profile) {
@@ -138,6 +139,7 @@ async function initProfile(userId: string, username?: string, displayName?: stri
       losses: 0,
       draws: 0,
       lastActive: Date.now(),
+      referrals: 0,
     };
     await kv.set(key, profile);
     return { profile, isNew: true };
@@ -175,6 +177,7 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
     wins: (existing.wins || 0) + (delta.wins ?? 0),
     losses: (existing.losses || 0) + (delta.losses ?? 0),
     draws: (existing.draws || 0) + (delta.draws ?? 0),
+    referrals: (existing.referrals || 0) + (delta.referrals ?? 0),
     lastActive: Date.now(),
     id: existing.id,
   };
@@ -194,6 +197,7 @@ function getRank(trophies: number) {
 async function sendProfile(chatId: string) {
   const p = (await getProfile(chatId))!;
   const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
+  const referralLink = `https://t.me/${BOT_USERNAME}?start=${p.id}`;
   const msg =
     `🏅 *Profil: ${getDisplayName(p)}*\n\n` +
     `🆔 ID: \`${p.id}\`\n\n` +
@@ -202,8 +206,9 @@ async function sendProfile(chatId: string) {
     `🏅 Dereje: *${getRank(p.trophies)}*\n` +
     `🎲 Oýnalan oýunlar: *${p.gamesPlayed}*\n` +
     `✅ Ýeňişler: *${p.wins}* | ❌ Utulyşlar: *${p.losses}* | 🤝 Deňlikler: *${p.draws}*\n` +
-    `📈 Ýeňiş göterimi: *${winRate}%*\n\n` +
-    `🔗 Referral link: https://t.me/${BOT_USERNAME}?start=${p.id}`;
+    `📈 Ýeňiş göterimi: *${winRate}%*\n` +
+    `👥 Referallar: *${p.referrals}*\n\n` +
+    `🔗 Referral link: \`${referralLink}\``;
   await sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
@@ -1260,7 +1265,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     if (referrerId && isNew && referrerId !== fromId) {
       const refProfile = await getProfile(referrerId);
       if (refProfile) {
-        await updateProfile(referrerId, { tmt: 0.2 });
+        await updateProfile(referrerId, { tmt: 0.2, referrals: 1 });
         await sendMessage(referrerId, "✅ Täze referral! +0.2 TMT aldyňyz.");
         await sendMessage(fromId, `Siz ID:${referrerId} tarapyndan çagyryldyňyz.`);
       }
