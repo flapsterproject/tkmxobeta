@@ -126,9 +126,13 @@ function getDisplayName(p: Profile) {
 
 async function initProfile(userId: string, username?: string, displayName?: string): Promise<{ profile: Profile; isNew: boolean }> {
   const key = ["profiles", userId];
-  const res = await kv.get(key);
+  const res = await kv.get<Profile>(key);
+  let isNew = false;
+  let profile: Profile;
+
   if (!res.value) {
-    const profile: Profile = {
+    isNew = true;
+    profile = {
       id: userId,
       username,
       displayName: displayName || `ID:${userId}`,
@@ -141,32 +145,40 @@ async function initProfile(userId: string, username?: string, displayName?: stri
       lastActive: Date.now(),
       referrals: 0,
     };
-    await kv.set(key, profile);
-    return { profile, isNew: true };
   } else {
-    const existing = res.value as Profile;
-    let changed = false;
-    if (username && username !== existing.username) {
-      existing.username = username;
-      changed = true;
+    profile = res.value;
+    if (username && username !== profile.username) {
+      if (profile.username) {
+        await kv.delete(["usernames", profile.username.toLowerCase()]);
+      }
+      await kv.set(["usernames", username.toLowerCase()], userId);
+      profile.username = username;
     }
-    if (displayName && displayName !== existing.displayName) {
-      existing.displayName = displayName;
-      changed = true;
+    if (displayName && displayName !== profile.displayName) {
+      profile.displayName = displayName;
     }
-    existing.lastActive = Date.now();
-    await kv.set(key, existing); // Always save to update lastActive
-    return { profile: existing, isNew: false };
+    profile.lastActive = Date.now();
   }
+
+  await kv.set(key, profile);
+  return { profile, isNew };
 }
 
 async function getProfile(userId: string): Promise<Profile | null> {
-  const res = await kv.get(["profiles", userId]);
-  return (res.value as Profile) ?? null;
+  const res = await kv.get<Profile>(["profiles", userId]);
+  return res.value ?? null;
 }
 
 async function updateProfile(userId: string, delta: Partial<Profile>) {
-  const existing = (await getProfile(userId)) || (await initProfile(userId)).profile;
+  const existing = await getProfile(userId) ?? (await initProfile(userId)).profile;
+  let usernameChanged = false;
+  if (delta.username && delta.username !== existing.username) {
+    if (existing.username) {
+      await kv.delete(["usernames", existing.username.toLowerCase()]);
+    }
+    await kv.set(["usernames", delta.username.toLowerCase()], userId);
+    usernameChanged = true;
+  }
   const newProfile: Profile = {
     ...existing,
     username: delta.username ?? existing.username,
@@ -195,7 +207,8 @@ function getRank(trophies: number) {
 }
 
 async function sendProfile(chatId: string) {
-  const p = (await getProfile(chatId))!;
+  const p = await getProfile(chatId);
+  if (!p) return;
   const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
   const referralLink = `https://t.me/${BOT_USERNAME}?start=${p.id}`;
   const msg =
@@ -215,13 +228,8 @@ async function sendProfile(chatId: string) {
 // -------------------- Leaderboard helpers --------------------
 async function getLeaderboard(top = 10, offset = 0): Promise<{top: Profile[], total: number}> {
   const players: Profile[] = [];
-  try {
-    for await (const entry of kv.list({ prefix: ["profiles"] })) {
-      if (!entry.value) continue;
-      players.push(entry.value as Profile);
-    }
-  } catch (e) {
-    console.error("getLeaderboard kv.list error", e);
+  for await (const entry of kv.list<Profile>({ prefix: ["profiles"] })) {
+    players.push(entry.value);
   }
   players.sort((a, b) => {
     if (b.trophies !== a.trophies) return b.trophies - a.trophies;
@@ -653,7 +661,7 @@ async function handleCallback(cb: any) {
 
   if (data.startsWith("menu:")) {
     const cmd = data.split(":")[1];
-    await handleCommand(fromId, username, displayName, `/${cmd}`);
+    await handleCommand(fromId, username, displayName, `/${cmd}`, false);
     await answerCallbackQuery(callbackId);
     return;
   }
@@ -850,7 +858,7 @@ async function handleWithdrawal(fromId: string, text: string) {
         );
 
         const adminProfile = await getProfileByUsername(ADMIN_USERNAME);
-        const adminId = adminProfile?.id || `@${ADMIN_USERNAME}`;
+        const adminId = adminProfile?.id ?? `@${ADMIN_USERNAME}`;
         const userDisplayName = getDisplayName(profile);
         const adminMessage = `💰 *ÇYKARMA ISLEGI*\n\nUlanyjy: ${userDisplayName} (ID: ${fromId})\nMukdar: ${amount} TMT\nTelefon: ${phoneNumber}\n\nEl bilen işläň.`;
         await sendMessage(adminId, adminMessage, { parse_mode: "Markdown" });
@@ -872,16 +880,9 @@ async function handleWithdrawal(fromId: string, text: string) {
 }
 
 async function getProfileByUsername(username: string): Promise<Profile | null> {
-  try {
-    for await (const entry of kv.list({ prefix: ["profiles"] })) {
-      const profile = entry.value as Profile;
-      if (!profile) continue;
-      if (profile.username === username) return profile;
-    }
-  } catch (e) {
-    console.error("getProfileByUsername error", e);
-  }
-  return null;
+  const userIdRes = await kv.get<string>(["usernames", username.toLowerCase()]);
+  if (!userIdRes.value) return null;
+  return await getProfile(userIdRes.value);
 }
 
 // -------------------- Promocode handler --------------------
@@ -996,9 +997,8 @@ async function sendStats(chatId: string) {
   let bossBattlesPlayed = 0;
 
   // Count users and sum stats
-  for await (const entry of kv.list({ prefix: ["profiles"] })) {
-    if (!entry.value) continue;
-    const p = entry.value as Profile;
+  for await (const entry of kv.list<Profile>({ prefix: ["profiles"] })) {
+    const p = entry.value;
     if (p.id.startsWith("boss_")) continue; // Exclude bosses
     userCount++;
     totalGamesPlayed += p.gamesPlayed || 0;
@@ -1008,14 +1008,12 @@ async function sendStats(chatId: string) {
 
   // Sum TMT from promocodes (assuming each use gives 1 TMT)
   for await (const entry of kv.list({ prefix: ["promocodes"] })) {
-    if (!entry.value) continue;
     const promo = entry.value as { maxUses: number; currentUses: number };
     totalTMTFromPromos += promo.currentUses;
   }
 
   // Count bosses and sum battles
   for await (const entry of kv.list({ prefix: ["bosses"] })) {
-    if (!entry.value) continue;
     const boss = entry.value as { photoId: string; rounds: number; maxUses: number; currentUses: number; reward: number };
     bossCount++;
     bossBattlesPlayed += boss.currentUses;
@@ -1331,9 +1329,8 @@ serve(async (req: Request) => {
         await handleCommand(fromId, username, displayName, text, isNew);
       } else if (globalMessageStates[fromId]) {
         globalMessageStates[fromId] = false;
-        for await (const entry of kv.list({ prefix: ["profiles"] })) {
-          const profile = entry.value as Profile;
-          if (!profile) continue;
+        for await (const entry of kv.list<Profile>({ prefix: ["profiles"] })) {
+          const profile = entry.value;
           await sendMessage(profile.id, `📢 *Global habar:*\n\n${text}`, { parse_mode: "Markdown" });
         }
         await sendMessage(fromId, "✅ Global habar iberildi!");
