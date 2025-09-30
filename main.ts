@@ -16,6 +16,7 @@ if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/tkmxo"; // make sure webhook path matches
 const CHANNEL = "@TkmXO";
+const BOT_USERNAME = "TkmXOBot"; // Assuming the bot username
 
 // Deno KV
 const kv = await Deno.openKv();
@@ -168,7 +169,7 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
     username: delta.username ?? existing.username,
     displayName: delta.displayName ?? existing.displayName,
     trophies: Math.max(0, (existing.trophies || 0) + (delta.trophies ?? 0)),
-    tmt: Math.max(0, (existing.tmt || 0) + (delta.tmt ?? 0)),
+    tmt: (existing.tmt || 0) + (delta.tmt ?? 0),
     gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
     wins: (existing.wins || 0) + (delta.wins ?? 0),
     losses: (existing.losses || 0) + (delta.losses ?? 0),
@@ -193,15 +194,17 @@ async function sendProfile(chatId: string) {
   await initProfile(chatId);
   const p = (await getProfile(chatId))!;
   const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
+  const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${p.id}`;
   const msg =
     `🏅 *Profil: ${getDisplayName(p)}*\n\n` +
     `🆔 ID: \`${p.id}\`\n\n` +
     `🏆 Kuboklar: *${p.trophies}*\n` +
-    `💰 TMT Balans: *${p.tmt}*\n` +
+    `💰 TMT Balans: *${p.tmt.toFixed(2)}*\n` +
     `🏅 Dereje: *${getRank(p.trophies)}*\n` +
     `🎲 Oýnalan oýunlar: *${p.gamesPlayed}*\n` +
     `✅ Ýeňişler: *${p.wins}* | ❌ Utulyşlar: *${p.losses}* | 🤝 Deňlikler: *${p.draws}*\n` +
-    `📈 Ýeňiş göterimi: *${winRate}%*`;
+    `📈 Ýeňiş göterimi: *${winRate}%*\n\n` +
+    `🔗 Referral ssylka: [Referral](https://t.me/${BOT_USERNAME}?start=ref_${p.id})`;
   await sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
@@ -806,7 +809,7 @@ async function handleWithdrawal(fromId: string, text: string) {
 
       const profile = await getProfile(fromId);
       if (!profile || profile.tmt < amount) {
-        await sendMessage(fromId, `❌ Ýeterlik TMT ýok. Balans: ${profile?.tmt ?? 0} TMT.`);
+        await sendMessage(fromId, `❌ Ýeterlik TMT ýok. Balans: ${profile?.tmt.toFixed(2) ?? 0} TMT.`);
         delete withdrawalStates[fromId];
         return;
       }
@@ -971,55 +974,6 @@ async function handleCreateBoss(msg: any, fromId: string) {
   await kv.set(["bosses", name], { photoId, rounds, maxUses, currentUses: 0, reward });
   await sendMessage(fromId, `✅ Boss döredildi: ${name}`);
   delete createBossStates[fromId];
-}
-
-// -------------------- Stats for admin --------------------
-async function sendStats(chatId: string) {
-  let userCount = 0;
-  let totalTMTFromPromos = 0;
-  let totalGamesPlayed = 0;
-  let totalTrophies = 0;
-  let totalTMT = 0;
-  let bossCount = 0;
-  let bossBattlesPlayed = 0;
-
-  // Count users and sum stats
-  for await (const entry of kv.list({ prefix: ["profiles"] })) {
-    if (!entry.value) continue;
-    const p = entry.value as Profile;
-    if (p.id.startsWith("boss_")) continue; // Exclude bosses
-    userCount++;
-    totalGamesPlayed += p.gamesPlayed || 0;
-    totalTrophies += p.trophies || 0;
-    totalTMT += p.tmt || 0;
-  }
-
-  // Sum TMT from promocodes (assuming each use gives 1 TMT)
-  for await (const entry of kv.list({ prefix: ["promocodes"] })) {
-    if (!entry.value) continue;
-    const promo = entry.value as { maxUses: number; currentUses: number };
-    totalTMTFromPromos += promo.currentUses;
-  }
-
-  // Count bosses and sum battles
-  for await (const entry of kv.list({ prefix: ["bosses"] })) {
-    if (!entry.value) continue;
-    const boss = entry.value as { photoId: string; rounds: number; maxUses: number; currentUses: number; reward: number };
-    bossCount++;
-    bossBattlesPlayed += boss.currentUses;
-  }
-
-  const msg = 
-    `📊 *Bot Statistika*\n\n` +
-    `👥 Ulanyjylar sany: *${userCount}*\n` +
-    `💰 Promokodlar arkaly berlen TMT: *${totalTMTFromPromos}*\n` +
-    `🎲 Jemi oýnalan oýunlar: *${totalGamesPlayed}*\n` +
-    `🏆 Jemi kuboklar: *${totalTrophies}*\n` +
-    `💰 Jemi TMT ulgamynda: *${totalTMT}*\n` +
-    `🤖 Bosslar sany: *${bossCount}*\n` +
-    `⚔️ Boss söweşleri sany: *${bossBattlesPlayed}*`;
-
-  await sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
 // -------------------- Commands --------------------
@@ -1197,15 +1151,6 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
-  if (text.startsWith("/stats")) {
-    if (username !== ADMIN_USERNAME) {
-      await sendMessage(fromId, "❌ Ruhsat ýok.");
-      return;
-    }
-    await sendStats(fromId);
-    return;
-  }
-
   if (text.startsWith("/start") || text.startsWith("/help")) {
     const helpText =
       `🎮 *TkmXO Bot-a hoş geldiňiz!*\n\n` +
@@ -1250,6 +1195,23 @@ serve(async (req: Request) => {
       const fromId = String(from.id);
       const username = from.username;
       const displayName = from.first_name || from.username || fromId;
+
+      // Handle referral before initializing profile
+      const parts = text.split(" ");
+      if (parts[0] === "/start" && parts.length > 1) {
+        const refParam = parts[1];
+        if (refParam.startsWith("ref_")) {
+          const referrerId = refParam.slice(4);
+          const existing = await getProfile(fromId);
+          if (!existing) {
+            const referrerProfile = await getProfile(referrerId);
+            if (referrerProfile) {
+              await updateProfile(referrerId, { tmt: 0.2 });
+              await sendMessage(referrerId, "🎉 Täze referral! +0.2 TMT aldyňyz.");
+            }
+          }
+        }
+      }
 
       await initProfile(fromId, username, displayName);
 
