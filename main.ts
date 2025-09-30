@@ -117,6 +117,7 @@ type Profile = {
 };
 
 function getDisplayName(p: Profile) {
+  if (p.username) return `@${p.username}`;
   return p.displayName && p.displayName !== "" ? p.displayName : `ID:${p.id}`;
 }
 
@@ -238,7 +239,7 @@ async function sendLeaderboard(chatId: string, page = 0) {
     const rankNum = offset + i + 1;
     const name = getDisplayName(p);
     const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
-    msg += `*${rankNum}.* ${name} — 🏆 *${p.trophies}* | 📈 *${winRate}%*\n`;
+    msg += `*${rankNum}.* [${name}](tg://user?id=${p.id}) — 🏆 *${p.trophies}* | 📈 *${winRate}%*\n`;
   });
 
   const keyboard: any = { inline_keyboard: [] };
