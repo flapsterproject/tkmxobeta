@@ -811,6 +811,11 @@ async function handleWithdrawal(fromId: string, text: string) {
         return;
       }
 
+      if (amount < 5) {
+        await sendMessage(fromId, "❌ Çykarmak üçin iň az 5 TMT gerek.");
+        return;
+      }
+
       const profile = await getProfile(fromId);
       if (!profile || profile.tmt < amount) {
         await sendMessage(fromId, `❌ Ýeterlik TMT ýok. Balans: ${profile?.tmt ?? 0} TMT.`);
@@ -1198,6 +1203,10 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     const profile = await getProfile(fromId);
     if (!profile) {
       await sendMessage(fromId, "❌ Profil ýok. Ilki oýna başlaň!");
+      return;
+    }
+    if (profile.tmt < 5) {
+      await sendMessage(fromId, "❌ Çykarmak üçin iň az 5 TMT gerek.");
       return;
     }
     await handleWithdrawal(fromId, "");
