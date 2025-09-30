@@ -846,7 +846,7 @@ async function handleWithdrawal(fromId: string, text: string) {
 
         const adminProfile = await getProfileByUsername(ADMIN_USERNAME);
         const adminId = adminProfile?.id || `@${ADMIN_USERNAME}`;
-        const userDisplayName = profile.displayName || `ID:${fromId}`;
+        const userDisplayName = getDisplayName(profile);
         const adminMessage = `💰 *ÇYKARMA ISLEGI*\n\nUlanyjy: ${userDisplayName} (ID: ${fromId})\nMukdar: ${amount} TMT\nTelefon: ${phoneNumber}\n\nEl bilen işläň.`;
         await sendMessage(adminId, adminMessage, { parse_mode: "Markdown" });
 
