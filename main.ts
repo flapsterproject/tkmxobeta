@@ -242,7 +242,7 @@ async function sendLeaderboard(chatId: string, page = 0) {
     return;
   }
 
-  let msg = `🏆 *Liderler tablosy* — Sahypa ${page + 1}\n\n`;
+  let msg = `🏆 *Liderler* — Sahypa ${page + 1}\n\n`;
   topPlayers.forEach((p, i) => {
     const rankNum = offset + i + 1;
     const name = getDisplayName(p);
@@ -552,7 +552,7 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
         await updateProfile(p1, { tmt: battle.bossData.reward });
         await sendMessage(p1, `🎉 Bossy ýeňdiňiz! +${battle.bossData.reward} TMT!`);
       } else if (battle.isBoss) {
-        await sendMessage(p1, "Gyzgyn utulyş boldy...");
+        await sendMessage(p1, "Bossdan utuldyň...");
       }
     }
 
