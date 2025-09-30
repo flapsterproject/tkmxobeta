@@ -849,6 +849,13 @@ async function handleWithdrawal(fromId: string, text: string) {
         return;
       }
 
+      const adminProfile = await getProfileByUsername(ADMIN_USERNAME);
+      if (!adminProfile) {
+        await sendMessage(fromId, "❌ Admin profil ýok. @Masakoff bota başlaň.");
+        delete withdrawalStates[fromId];
+        return;
+      }
+
       try {
         await updateProfile(fromId, { tmt: -amount });
 
@@ -857,8 +864,7 @@ async function handleWithdrawal(fromId: string, text: string) {
           `✅ Çykarma islegi üstünlikli! Mukdar: ${amount} TMT\nTelefon: ${phoneNumber}\nİşlenýär...`,
         );
 
-        const adminProfile = await getProfileByUsername(ADMIN_USERNAME);
-        const adminId = adminProfile?.id ?? `@${ADMIN_USERNAME}`;
+        const adminId = adminProfile.id;
         const userDisplayName = getDisplayName(profile);
         const adminMessage = `💰 *ÇYKARMA ISLEGI*\n\nUlanyjy: ${userDisplayName} (ID: ${fromId})\nMukdar: ${amount} TMT\nTelefon: ${phoneNumber}\n\nEl bilen işläň.`;
         await sendMessage(adminId, adminMessage, { parse_mode: "Markdown" });
@@ -866,6 +872,7 @@ async function handleWithdrawal(fromId: string, text: string) {
         delete withdrawalStates[fromId];
       } catch (error) {
         console.error("Withdrawal error:", error);
+        await updateProfile(fromId, { tmt: amount });
         await sendMessage(fromId, "❌ Näsazlyk ýüze çykdy. Täzeden synanyşyň.");
         delete withdrawalStates[fromId];
       }
