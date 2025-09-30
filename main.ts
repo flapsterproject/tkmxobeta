@@ -205,7 +205,7 @@ async function sendProfile(chatId: string) {
 }
 
 // -------------------- Leaderboard helpers --------------------
-async function getLeaderboard(top = 10, offset = 0) {
+async function getLeaderboard(top = 10, offset = 0): Promise<{top: Profile[], total: number}> {
   const players: Profile[] = [];
   try {
     for await (const entry of kv.list({ prefix: ["profiles"] })) {
@@ -219,16 +219,17 @@ async function getLeaderboard(top = 10, offset = 0) {
     if (b.trophies !== a.trophies) return b.trophies - a.trophies;
     return b.wins - a.wins;
   });
-  return players.slice(offset, offset + top);
+  return {top: players.slice(offset, offset + top), total: players.length};
 }
 
 async function sendLeaderboard(chatId: string, page = 0) {
   const perPage = 10;
   const offset = page * perPage;
-  const topPlayers = await getLeaderboard(perPage, offset);
+  const {top: topPlayers, total} = await getLeaderboard(perPage, offset);
 
   if (topPlayers.length === 0) {
-    await sendMessage(chatId, "Entäk oýunçy ýok! Liderler tablosyna çykmak üçin oýna başlaň!");
+    const msg = page === 0 ? "Entäk oýunçy ýok! Liderler tablosyna çykmak üçin oýna başlaň!" : "Indiki sahypa ýok!";
+    await sendMessage(chatId, msg);
     return;
   }
 
@@ -243,7 +244,7 @@ async function sendLeaderboard(chatId: string, page = 0) {
   const keyboard: any = { inline_keyboard: [] };
   const row: any[] = [];
   if (page > 0) row.push({ text: "⬅️ Öňki", callback_data: `leaderboard:${page - 1}` });
-  if (topPlayers.length === perPage) row.push({ text: "Indiki ➡️", callback_data: `leaderboard:${page + 1}` });
+  if (offset + topPlayers.length < total) row.push({ text: "Indiki ➡️", callback_data: `leaderboard:${page + 1}` });
   if (row.length) keyboard.inline_keyboard.push(row);
 
   await sendMessage(chatId, msg, { reply_markup: keyboard, parse_mode: "Markdown" });
@@ -449,12 +450,12 @@ async function sendRoundStart(battle: any) {
   if (battle.idleTimerId) {
     clearTimeout(battle.idleTimerId);
   }
-  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000); // 5 minutes
+  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 3 * 60 * 1000); // Reduced to 3 minutes
 
   if (battle.moveTimerId) {
     clearTimeout(battle.moveTimerId);
   }
-  battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000); // 1 minute
+  battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // Reduced to 30 seconds
 
   if (battle.isBoss && battle.turn.startsWith("boss_")) {
     await makeBossMove(battle);
@@ -463,8 +464,8 @@ async function sendRoundStart(battle: any) {
 
 async function endBattleIdle(battle: any) {
   const [p1, p2] = battle.players;
-  if (!p2.startsWith("boss_")) await sendMessage(p2, "⚠️ Oýun hereketsizlik sebäpli ýatyryldy (5 minut).");
-  await sendMessage(p1, "⚠️ Oýun hereketsizlik sebäpli ýatyryldy (5 minut).");
+  if (!p2.startsWith("boss_")) await sendMessage(p2, "⚠️ Oýun hereketsizlik sebäpli ýatyryldy (3 minut).");
+  await sendMessage(p1, "⚠️ Oýun hereketsizlik sebäpli ýatyryldy (3 minut).");
 
   if (battle.isTrophyBattle) {
     await updateProfile(p1, { tmt: 1 });
@@ -534,7 +535,7 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
       if (!loser.startsWith("boss_")) await sendMessage(loser, `😢 Siz utuldyňyz.\n🏆 *-1 kubok* (vs ID:${winner})`, { parse_mode: "Markdown" });
 
       if (battle.isTrophyBattle) {
-        await updateProfile(winner, { tmt: 0.75 });
+        await updateProfile(winner, { tmt: 1.75 });
         await sendMessage(winner, "🏆 TMT söweşde ýeňeniňiz üçin +0.75 TMT!");
         await sendMessage(loser, "💔 TMT söweşde utulanyňyz üçin -1 TMT.");
       }
@@ -608,7 +609,7 @@ async function makeBossMove(battle: any) {
     battle.turn = battle.players[(battle.round - 1) % 2];
 
     if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
-    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000);
+    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // Reduced to 30 seconds
 
     await sendRoundStart(battle);
     return;
@@ -673,12 +674,12 @@ async function handleCallback(cb: any) {
   // Reset timers
   if (battle.idleTimerId) {
     clearTimeout(battle.idleTimerId);
-    battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
+    battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 3 * 60 * 1000); // Reduced to 3 minutes
   }
 
   if (battle.moveTimerId) {
     clearTimeout(battle.moveTimerId);
-    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000);
+    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // Reduced to 30 seconds
   }
 
   if (data === "surrender") {
@@ -759,7 +760,7 @@ async function handleCallback(cb: any) {
     battle.turn = battle.players[(battle.round - 1) % 2];
 
     if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
-    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000);
+    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // Reduced to 30 seconds
 
     await sendRoundStart(battle);
     await answerCallbackQuery(callbackId, "Hereket edildi!");
