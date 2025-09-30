@@ -6,6 +6,7 @@
 // Withdrawal functionality (/withdraw)
 // New: Subscription check (@TkmXO), Promocodes, Boss battles (vs AI), Main menu with inline buttons
 // All messages in Turkmen language
+// New: Referral system - 0.2 TMT per new referral who starts the bot first time
 //
 // Notes: Requires BOT_TOKEN env var and Deno KV. Deploy as webhook at SECRET_PATH.
 
@@ -16,7 +17,7 @@ if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/tkmxo"; // make sure webhook path matches
 const CHANNEL = "@TkmXO";
-const BOT_USERNAME = "TkmXOBot"; // Assuming the bot username
+const BOT_USERNAME = "TkmXOBot"; // Adjust to your bot's username
 
 // Deno KV
 const kv = await Deno.openKv();
@@ -122,7 +123,7 @@ function getDisplayName(p: Profile) {
   return p.displayName && p.displayName !== "" ? p.displayName : `ID:${p.id}`;
 }
 
-async function initProfile(userId: string, username?: string, displayName?: string) {
+async function initProfile(userId: string, username?: string, displayName?: string): Promise<{ profile: Profile; isNew: boolean }> {
   const key = ["profiles", userId];
   const res = await kv.get(key);
   if (!res.value) {
@@ -139,7 +140,7 @@ async function initProfile(userId: string, username?: string, displayName?: stri
       lastActive: Date.now(),
     };
     await kv.set(key, profile);
-    return profile;
+    return { profile, isNew: true };
   } else {
     const existing = res.value as Profile;
     let changed = false;
@@ -152,8 +153,8 @@ async function initProfile(userId: string, username?: string, displayName?: stri
       changed = true;
     }
     existing.lastActive = Date.now();
-    if (changed) await kv.set(key, existing);
-    return existing;
+    await kv.set(key, existing); // Always save to update lastActive
+    return { profile: existing, isNew: false };
   }
 }
 
@@ -163,13 +164,13 @@ async function getProfile(userId: string): Promise<Profile | null> {
 }
 
 async function updateProfile(userId: string, delta: Partial<Profile>) {
-  const existing = (await getProfile(userId)) || (await initProfile(userId));
+  const existing = (await getProfile(userId)) || (await initProfile(userId)).profile;
   const newProfile: Profile = {
     ...existing,
     username: delta.username ?? existing.username,
     displayName: delta.displayName ?? existing.displayName,
     trophies: Math.max(0, (existing.trophies || 0) + (delta.trophies ?? 0)),
-    tmt: (existing.tmt || 0) + (delta.tmt ?? 0),
+    tmt: Math.max(0, (existing.tmt || 0) + (delta.tmt ?? 0)),
     gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
     wins: (existing.wins || 0) + (delta.wins ?? 0),
     losses: (existing.losses || 0) + (delta.losses ?? 0),
@@ -191,20 +192,18 @@ function getRank(trophies: number) {
 }
 
 async function sendProfile(chatId: string) {
-  await initProfile(chatId);
   const p = (await getProfile(chatId))!;
   const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
-  const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${p.id}`;
   const msg =
     `🏅 *Profil: ${getDisplayName(p)}*\n\n` +
     `🆔 ID: \`${p.id}\`\n\n` +
     `🏆 Kuboklar: *${p.trophies}*\n` +
-    `💰 TMT Balans: *${p.tmt.toFixed(2)}*\n` +
+    `💰 TMT Balans: *${p.tmt}*\n` +
     `🏅 Dereje: *${getRank(p.trophies)}*\n` +
     `🎲 Oýnalan oýunlar: *${p.gamesPlayed}*\n` +
     `✅ Ýeňişler: *${p.wins}* | ❌ Utulyşlar: *${p.losses}* | 🤝 Deňlikler: *${p.draws}*\n` +
     `📈 Ýeňiş göterimi: *${winRate}%*\n\n` +
-    `🔗 Referral ssylka: [Referral](https://t.me/${BOT_USERNAME}?start=ref_${p.id})`;
+    `🔗 Referral link: https://t.me/${BOT_USERNAME}?start=${p.id}`;
   await sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
@@ -809,7 +808,7 @@ async function handleWithdrawal(fromId: string, text: string) {
 
       const profile = await getProfile(fromId);
       if (!profile || profile.tmt < amount) {
-        await sendMessage(fromId, `❌ Ýeterlik TMT ýok. Balans: ${profile?.tmt.toFixed(2) ?? 0} TMT.`);
+        await sendMessage(fromId, `❌ Ýeterlik TMT ýok. Balans: ${profile?.tmt ?? 0} TMT.`);
         delete withdrawalStates[fromId];
         return;
       }
@@ -976,8 +975,57 @@ async function handleCreateBoss(msg: any, fromId: string) {
   delete createBossStates[fromId];
 }
 
+// -------------------- Stats for admin --------------------
+async function sendStats(chatId: string) {
+  let userCount = 0;
+  let totalTMTFromPromos = 0;
+  let totalGamesPlayed = 0;
+  let totalTrophies = 0;
+  let totalTMT = 0;
+  let bossCount = 0;
+  let bossBattlesPlayed = 0;
+
+  // Count users and sum stats
+  for await (const entry of kv.list({ prefix: ["profiles"] })) {
+    if (!entry.value) continue;
+    const p = entry.value as Profile;
+    if (p.id.startsWith("boss_")) continue; // Exclude bosses
+    userCount++;
+    totalGamesPlayed += p.gamesPlayed || 0;
+    totalTrophies += p.trophies || 0;
+    totalTMT += p.tmt || 0;
+  }
+
+  // Sum TMT from promocodes (assuming each use gives 1 TMT)
+  for await (const entry of kv.list({ prefix: ["promocodes"] })) {
+    if (!entry.value) continue;
+    const promo = entry.value as { maxUses: number; currentUses: number };
+    totalTMTFromPromos += promo.currentUses;
+  }
+
+  // Count bosses and sum battles
+  for await (const entry of kv.list({ prefix: ["bosses"] })) {
+    if (!entry.value) continue;
+    const boss = entry.value as { photoId: string; rounds: number; maxUses: number; currentUses: number; reward: number };
+    bossCount++;
+    bossBattlesPlayed += boss.currentUses;
+  }
+
+  const msg = 
+    `📊 *Bot Statistika*\n\n` +
+    `👥 Ulanyjylar sany: *${userCount}*\n` +
+    `💰 Promokodlar arkaly berlen TMT: *${totalTMTFromPromos}*\n` +
+    `🎲 Jemi oýnalan oýunlar: *${totalGamesPlayed}*\n` +
+    `🏆 Jemi kuboklar: *${totalTrophies}*\n` +
+    `💰 Jemi TMT ulgamynda: *${totalTMT}*\n` +
+    `🤖 Bosslar sany: *${bossCount}*\n` +
+    `⚔️ Boss söweşleri sany: *${bossBattlesPlayed}*`;
+
+  await sendMessage(chatId, msg, { parse_mode: "Markdown" });
+}
+
 // -------------------- Commands --------------------
-async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
+async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string, isNew: boolean) {
   if (!(await isSubscribed(fromId))) {
     await sendMessage(fromId, "Bot ulanmak üçin @TkmXO kanala ýazyl. Ýazyl we täzeden synanyş.", {
       reply_markup: { inline_keyboard: [[{ text: "Ýazyl", url: "https://t.me/TkmXO" }]] }
@@ -1151,9 +1199,33 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
+  if (text.startsWith("/stats")) {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(fromId, "❌ Ruhsat ýok.");
+      return;
+    }
+    await sendStats(fromId);
+    return;
+  }
+
   if (text.startsWith("/start") || text.startsWith("/help")) {
+    let referrerId: string | undefined;
+    const parts = text.split(" ");
+    if (parts.length > 1) {
+      referrerId = parts[1];
+    }
+    if (referrerId && isNew && referrerId !== fromId) {
+      const refProfile = await getProfile(referrerId);
+      if (refProfile) {
+        await updateProfile(referrerId, { tmt: 0.2 });
+        await sendMessage(referrerId, "✅ Täze referral! +0.2 TMT aldyňyz.");
+        await sendMessage(fromId, `Siz ID:${referrerId} tarapyndan çagyryldyňyz.`);
+      }
+    }
+
     const helpText =
       `🎮 *TkmXO Bot-a hoş geldiňiz!*\n\n` +
+      `Dostlaryňyzy çagyryň we her referral üçin 0.2 TMT gazanyň!\n\n` +
       `Buýruklar:\n` +
       `🔹 /battle - Kubok söweş üçin garşydaş tap.\n` +
       `🔹 /realbattle - TMT söweş (1 TMT goýum).\n` +
@@ -1196,27 +1268,10 @@ serve(async (req: Request) => {
       const username = from.username;
       const displayName = from.first_name || from.username || fromId;
 
-      // Handle referral before initializing profile
-      const parts = text.split(" ");
-      if (parts[0] === "/start" && parts.length > 1) {
-        const refParam = parts[1];
-        if (refParam.startsWith("ref_")) {
-          const referrerId = refParam.slice(4);
-          const existing = await getProfile(fromId);
-          if (!existing) {
-            const referrerProfile = await getProfile(referrerId);
-            if (referrerProfile) {
-              await updateProfile(referrerId, { tmt: 0.2 });
-              await sendMessage(referrerId, "🎉 Täze referral! +0.2 TMT aldyňyz.");
-            }
-          }
-        }
-      }
-
-      await initProfile(fromId, username, displayName);
+      const { isNew } = await initProfile(fromId, username, displayName);
 
       if (text.startsWith("/")) {
-        await handleCommand(fromId, username, displayName, text);
+        await handleCommand(fromId, username, displayName, text, isNew);
       } else if (globalMessageStates[fromId]) {
         globalMessageStates[fromId] = false;
         for await (const entry of kv.list({ prefix: ["profiles"] })) {
