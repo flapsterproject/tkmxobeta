@@ -220,7 +220,8 @@ async function getLeaderboard(top = 10, offset = 0): Promise<{top: Profile[], to
     if (b.trophies !== a.trophies) return b.trophies - a.trophies;
     return b.wins - a.wins;
   });
-  return {top: players.slice(offset, offset + top), total: players.length};
+  const filtered = players.filter(p => !p.id.startsWith("boss_"));
+  return {top: filtered.slice(offset, offset + top), total: filtered.length};
 }
 
 async function sendLeaderboard(chatId: string, page = 0) {
