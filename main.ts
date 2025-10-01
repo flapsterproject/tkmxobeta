@@ -1429,7 +1429,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     const helpText =
       `🌟 Salam! TkmXO BOT-a hoş geldiňiz!\n\n` +
       `🎮 TkmXO oýuny bilen, söweş ediň we gazanç alyň. ⚔️\n\n` +
-      `🎁 Başlangyç üçin /battle bilen kubok üçin söweş. TMT-a oýnamak üçin /realbattle 1 TMT goýuň we utsaňyz onuň üstüne +0.75 TMT gazanyň. 😄\n\n` +
+      `🎁 Başlangyç üçin ⚔️ Kubok söweş bilen kubok üçin söweş utsaňyz +1 kubok gazanyň,utulsaňyz -1 kubok. TMT-a oýnamak üçin 🏆 TMT söweş bilen 1 TMT goýuň we utsaňyz onuň üstüne +0.75 TMT gazanyň,utulsaňyz -1 TMT. 😄\n\n` +
       `👥 Dostlaryňyzy çagyryň we TMT gazanyň! Çagyran her bir dostuňyz üçin 0.2 TMT gazanyň. 💸\n\n` +
       `👥 Umumy ulanyjy sany: ${userCount}\n\n` +
       `🚀 Başlamak üçin aşakdaky düwmelerden birini saýla:`;
