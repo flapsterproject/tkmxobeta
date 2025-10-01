@@ -1140,10 +1140,10 @@ async function getUserCount(): Promise<number> {
 // -------------------- Commands --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string, isNew: boolean) {
   if (!(await isSubscribed(fromId))) {
-    await sendMessage(fromId, "Bot ulanmak üçin @TkmXO we @TkmXOChat kanallara ýazyl. Ýazyl we täzeden synanyş.", {
+    await sendMessage(fromId, "✨🤖 Boty ulanmak üçin bu kanallara agza bol!", {
       reply_markup: { inline_keyboard: [
-        [{ text: "Ýazyl @TkmXO", url: "https://t.me/TkmXO" }],
-        [{ text: "Ýazyl @TkmXOChat", url: "https://t.me/TkmXOChat" }]
+        [{ text: "TkmXO", url: "https://t.me/TkmXO" }],
+        [{ text: "TkmXO Chat", url: "https://t.me/TkmXOChat" }]
       ] }
     });
     return;
