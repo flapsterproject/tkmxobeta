@@ -1,8 +1,8 @@
 // main.ts
-// Telegram Chess Bot (Deno) - Fixed, improved & extended version
+// Telegram Tic-Tac-Toe Bot (Deno) - Fixed, improved & extended version
 // Features: matchmaking (/battle), trophy battles (/realbattle), private-game with inline buttons,
 // profiles with stats (Deno KV), leaderboard with pagination, admin (/addtouser, /createpromocode, /createboss, /globalmessage)
-// Match = best of 1 games (configurable for bosses)
+// Match = best of 3 rounds (configurable for bosses)
 // Withdrawal functionality (/withdraw)
 // New: Subscription check (@TkmXO), Promocodes, Boss battles (vs AI), Main menu with inline buttons
 // All messages in Turkmen language
@@ -11,7 +11,6 @@
 // Notes: Requires BOT_TOKEN env var and Deno KV. Deploy as webhook at SECRET_PATH.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { Chess } from "https://deno.land/x/chess@v0.2.0/mod.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
@@ -349,54 +348,97 @@ async function sendLeaderboard(chatId: string, page = 0) {
 }
 
 // -------------------- Game logic --------------------
-const pieceEmojis: Record<string, string> = {
-  'P': '♙', 'N': '♘', 'B': '♗', 'R': '♖', 'Q': '♕', 'K': '♔',
-  'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'q': '♛', 'k': '♚',
-  '.': '▫️'
-};
+function createEmptyBoard(): string[] {
+  return Array(9).fill("");
+}
 
-function boardToText(game: Chess) {
-  const board = game.board();
-  let text = '  a b c d e f g h\n';
-  for (let r = 7; r >= 0; r--) {
-    text += `${r + 1} `;
-    for (let c = 0; c < 8; c++) {
-      const sq = board[r][c];
-      let piece = '.';
-      if (sq) {
-        piece = sq.color === 'w' ? sq.type.toUpperCase() : sq.type.toLowerCase();
-      }
-      text += `${pieceEmojis[piece]} `;
-    }
-    text += '\n';
+function boardToText(board: string[]) {
+  const map: any = { "": "▫️", X: "❌", O: "⭕" };
+  let text = "\n";
+  for (let i = 0; i < 9; i += 3) {
+    text += `${map[board[i]]}${map[board[i + 1]]}${map[board[i + 2]]}\n`;
   }
-  text += '\nAklar aşakda.';
   return text;
 }
 
-function checkWin(game: Chess) {
-  if (game.isCheckmate()) {
-    const winnerColor = game.turn() === 'w' ? 'b' : 'w';
-    return { winner: winnerColor };
+function checkWin(board: string[]) {
+  const lines = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],
+    [0, 4, 8], [2, 4, 6]
+  ];
+  for (const [a, b, c] of lines) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      return { winner: board[a], line: [a, b, c] };
+    }
   }
-  if (game.isDraw()) return { winner: "draw" };
+  if (board.every((c) => c !== "")) return { winner: "draw" };
   return null;
 }
 
-function makeInlineKeyboard(disabled = false) {
-  return { inline_keyboard: [[{ text: "🏳️ Tabşyrmak", callback_data: "surrender" }]] };
+function makeInlineKeyboard(board: string[], disabled = false) {
+  const keyboard: any[] = [];
+  for (let r = 0; r < 3; r++) {
+    const row: any[] = [];
+    for (let c = 0; c < 3; c++) {
+      const i = r * 3 + c;
+      const cell = board[i];
+      let text = cell === "X" ? "❌" : cell === "O" ? "⭕" : `${i + 1}`;
+      const callback_data = disabled ? "noop" : `move:${i}`;
+      row.push({ text, callback_data });
+    }
+    keyboard.push(row);
+  }
+  keyboard.push([{ text: "🏳️ Tabşyrmak", callback_data: "surrender" }]);
+  return { inline_keyboard: keyboard };
 }
 
-// -------------------- AI for Boss (Random move) --------------------
-function computerMove(game: Chess): { from: string; to: string; promotion?: string } | null {
-  const moves = game.moves({ verbose: true });
-  if (moves.length === 0) return null;
-  const randomMove = moves[Math.floor(Math.random() * moves.length)];
-  return { from: randomMove.from, to: randomMove.to, promotion: randomMove.promotion };
+// -------------------- AI for Boss (Minimax) --------------------
+function minimax(newBoard: string[], player: string, aiMark: string, humanMark: string): { score: number; index?: number } {
+  const availSpots = newBoard.map((val, idx) => val === "" ? idx : null).filter(v => v !== null) as number[];
+
+  const result = checkWin(newBoard);
+  if (result?.winner === aiMark) return { score: 10 };
+  if (result?.winner === humanMark) return { score: -10 };
+  if (result?.winner === "draw") return { score: 0 };
+
+  const moves: { index: number; score: number }[] = [];
+
+  for (const index of availSpots) {
+    newBoard[index] = player;
+    const score = minimax(newBoard, player === aiMark ? humanMark : aiMark, aiMark, humanMark).score;
+    moves.push({ index, score });
+    newBoard[index] = "";
+  }
+
+  let bestMove;
+  if (player === aiMark) {
+    let bestScore = -Infinity;
+    for (const move of moves) {
+      if (move.score > bestScore) {
+        bestScore = move.score;
+        bestMove = move;
+      }
+    }
+  } else {
+    let bestScore = Infinity;
+    for (const move of moves) {
+      if (move.score < bestScore) {
+        bestScore = move.score;
+        bestMove = move;
+      }
+    }
+  }
+  return bestMove ?? { score: 0 };
+}
+
+function computerMove(board: string[], aiMark: string, humanMark: string): number {
+  const result = minimax([...board], aiMark, aiMark, humanMark);
+  return result.index ?? -1;
 }
 
 // -------------------- Battle control --------------------
-async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = false, rounds: number = 1) {
+async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = false, rounds: number = 3) {
   if (searchTimeouts[p1]) {
     clearTimeout(searchTimeouts[p1]);
     delete searchTimeouts[p1];
@@ -408,10 +450,9 @@ async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = fal
 
   const battle = {
     players: [p1, p2],
-    game: new Chess(),
-    currentPlayer: p1,
-    colors: { [p1]: "w", [p2]: "b" },
-    playerByColor: { w: p1, b: p2 },
+    board: createEmptyBoard(),
+    turn: p1,
+    marks: { [p1]: "X", [p2]: "O" },
     messageIds: {} as Record<string, number>,
     idleTimerId: undefined as number | undefined,
     moveTimerId: undefined as number | undefined,
@@ -430,8 +471,8 @@ async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = fal
   const battleTypeText = isTrophyBattle ? "🏆 *TMT üçin söweş*" : "⚔️ *Kubok üçin söweş*";
   const stakeText = isTrophyBattle ? "\n\nGoýumlar: Iki oýunçy hem 1 TMT goýýar. Ýeňiji +0.75 TMT alýar." : "";
 
-  await sendMessage(p1, `${battleTypeText}\n\nSen ak (w).${stakeText}\n\n*Oýun tertibi:* ${rounds} turdan ybarat vs ID:${p2}`, { parse_mode: "Markdown" });
-  await sendMessage(p2, `${battleTypeText}\n\nSen gara (b).${stakeText}\n\n*Oýun tertibi:* ${rounds} turdan ybarat vs ID:${p1}`, { parse_mode: "Markdown" });
+  await sendMessage(p1, `${battleTypeText}\n\nSen ❌ (X).${stakeText}\n\n*Oýun tertibi:* ${rounds} turdan ybarat vs ID:${p2}`, { parse_mode: "Markdown" });
+  await sendMessage(p2, `${battleTypeText}\n\nSen ⭕ (O).${stakeText}\n\n*Oýun tertibi:* ${rounds} turdan ybarat vs ID:${p1}`, { parse_mode: "Markdown" });
   await sendRoundStart(battle);
 }
 
@@ -439,10 +480,9 @@ async function startBossBattle(user: string, bossName: string, boss: any) {
   const bossId = `boss_${bossName}`;
   const battle = {
     players: [user, bossId],
-    game: new Chess(),
-    currentPlayer: user,
-    colors: { [user]: "w", [bossId]: "b" },
-    playerByColor: { w: user, b: bossId },
+    board: createEmptyBoard(),
+    turn: user,
+    marks: { [user]: "X", [bossId]: "O" },
     messageIds: {} as Record<string, number>,
     idleTimerId: undefined as number | undefined,
     moveTimerId: undefined as number | undefined,
@@ -458,21 +498,21 @@ async function startBossBattle(user: string, bossName: string, boss: any) {
   battles[bossId] = battle;
 
   await sendPhoto(user, boss.photoId, { caption: `Boss: ${bossName}\nTur sanaw: ${boss.rounds}\nBaha: ${boss.reward} TMT (ýeňişde)` });
-  await sendMessage(user, "Boss bilen söweş başlaýar! Sen ak (w).", { parse_mode: "Markdown" });
+  await sendMessage(user, "Boss bilen söweş başlaýar! Sen ❌ (X).", { parse_mode: "Markdown" });
   await sendRoundStart(battle);
 }
 
 function headerForPlayer(battle: any, player: string) {
   const opponent = battle.players.find((p: string) => p !== player)!;
-  const yourColor = battle.colors[player];
-  const opponentColor = battle.colors[opponent];
+  const yourMark = battle.marks[player];
+  const opponentMark = battle.marks[opponent];
   const battleTypeText = battle.isBoss ? "🤖 *Boss bilen söweş*" : battle.isTrophyBattle ? "🏆 *TMT söweşi*" : "⚔️ *Kubok söweşi*";
   const opponentDisplay = battle.isBoss ? battle.bossName : `ID:${opponent}`;
-  return `${battleTypeText} — Sen (${yourColor}) vs ${opponentDisplay} (${opponentColor})`;
+  return `${battleTypeText} — Sen (${yourMark}) vs ${opponentDisplay} (${opponentMark})`;
 }
 
 async function endTurnIdle(battle: any) {
-  const loser = battle.currentPlayer;
+  const loser = battle.turn;
   const winner = battle.players.find((p: string) => p !== loser)!;
 
   await sendMessage(loser, "⚠️ Hereketde gijä galdyňyz. Siz tabşyrdyňyz.");
@@ -493,29 +533,28 @@ async function endTurnIdle(battle: any) {
 async function sendRoundStart(battle: any) {
   for (const player of battle.players.filter((p: string) => !p.startsWith("boss_"))) {
     const header = headerForPlayer(battle, player);
-    const yourTurn = battle.currentPlayer === player;
-    const moveInstruction = yourTurn ? "\n\n🎲 *Seniň hereketiň*\nHereket giriziň: from to (mysal: e2 e4 ýa-da e7 e8 q üçin promosýa)" : "\n\nGarşydaşyň hereketi";
+    const yourTurn = battle.turn === player;
     const text =
       `${header}\n\n` +
       `*Tur ${battle.round}/${battle.rounds}*\n` +
       `📊 Hesap: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n` +
-      `${moveInstruction}\n` +
-      boardToText(battle.game);
-    const msgId = await sendMessage(player, text, { reply_markup: makeInlineKeyboard(false), parse_mode: "Markdown" });
+      `🎲 Hereket: ${yourTurn ? "*Seniň hereketiň*" : "Garşydaşyň hereketi"}\n` +
+      boardToText(battle.board);
+    const msgId = await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
     if (msgId) battle.messageIds[player] = msgId;
   }
 
   if (battle.idleTimerId) {
     clearTimeout(battle.idleTimerId);
   }
-  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 3 * 60 * 1000); // 3 minutes
+  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 3 * 60 * 1000); // Reduced to 3 minutes
 
   if (battle.moveTimerId) {
     clearTimeout(battle.moveTimerId);
   }
-  battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // 30 seconds
+  battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // Reduced to 30 seconds
 
-  if (battle.isBoss && battle.currentPlayer.startsWith("boss_")) {
+  if (battle.isBoss && battle.turn.startsWith("boss_")) {
     await makeBossMove(battle);
   }
 }
@@ -553,14 +592,14 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
       const header = headerForPlayer(battle, player);
       let text: string;
       if (result.draw) {
-        text = `${header}\n\n*Oýun Netijesi:* 🤝 *Deňlik!*\n${boardToText(battle.game)}`;
+        text = `${header}\n\n*Oýun Netijesi:* 🤝 *Deňlik!*\n${boardToText(battle.board)}`;
       } else if (result.winner === player) {
-        text = `${header}\n\n*Oýun Netijesi:* 🎉 *Siz ýeňdiňiz!*\n${boardToText(battle.game)}`;
+        text = `${header}\n\n*Oýun Netijesi:* 🎉 *Siz ýeňdiňiz!*\n${boardToText(battle.board)}`;
       } else {
-        text = `${header}\n\n*Oýun Netijesi:* 😢 *Siz utuldyňyz.*\n${boardToText(battle.game)}`;
+        text = `${header}\n\n*Oýun Netijesi:* 😢 *Siz utuldyňyz.*\n${boardToText(battle.board)}`;
       }
       if (msgId) {
-        await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(true), parse_mode: "Markdown" });
+        await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board, true), parse_mode: "Markdown" });
       } else {
         await sendMessage(player, text, { parse_mode: "Markdown" });
       }
@@ -616,22 +655,26 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
 async function makeBossMove(battle: any) {
   const boss = battle.players.find((p: string) => p.startsWith("boss_"))!;
   const user = battle.players.find((p: string) => !p.startsWith("boss_"))!;
-  const move = computerMove(battle.game);
-  if (!move) return; // no move
+  const mark = battle.marks[boss];
+  const humanMark = battle.marks[user];
+  const idx = computerMove(battle.board, mark, humanMark);
+  if (idx === -1) return; // no move
 
-  battle.game.move(move);
+  battle.board[idx] = mark;
 
-  const winResult = checkWin(battle.game);
+  const winResult = checkWin(battle.board);
   let roundWinner: string | undefined;
   if (winResult) {
-    const { winner } = winResult as any;
+    const { winner, line } = winResult as any;
     if (winner !== "draw") {
-      roundWinner = battle.playerByColor[winner];
+      roundWinner = battle.players.find((p: string) => battle.marks[p] === winner)!;
       battle.roundWins[roundWinner] = (battle.roundWins[roundWinner] || 0) + 1;
     }
 
-    let boardText = boardToText(battle.game);
-    if (winner === "draw") {
+    let boardText = boardToText(battle.board);
+    if (line) {
+      boardText += `\n🎉 *Çyzyk:* ${line.map((i: number) => i + 1).join("-")}`;
+    } else if (winner === "draw") {
       boardText += `\n🤝 *Deňlik!*`;
     }
 
@@ -641,7 +684,7 @@ async function makeBossMove(battle: any) {
     if (winner === "draw") text += `🤝 Deňlik boldy!\n`;
     else text += `${roundWinner === user ? "🎉 Siz turda ýeňdiňiz!" : "😢 Siz turda utuldyňyz"}\n`;
     text += `📊 Hesap: ${battle.roundWins[user]} - ${battle.roundWins[boss]}\n${boardText}`;
-    if (msgId) await editMessageText(user, msgId, text, { reply_markup: makeInlineKeyboard(true), parse_mode: "Markdown" });
+    if (msgId) await editMessageText(user, msgId, text, { reply_markup: makeInlineKeyboard(battle.board, true), parse_mode: "Markdown" });
     else await sendMessage(user, text, { parse_mode: "Markdown" });
 
     // Check if match over
@@ -659,122 +702,28 @@ async function makeBossMove(battle: any) {
 
     // Next round
     battle.round++;
-    battle.game = new Chess();
-    battle.currentPlayer = battle.players[(battle.round - 1) % 2];
+    battle.board = createEmptyBoard();
+    battle.turn = battle.players[(battle.round - 1) % 2];
 
     if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
-    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // 30 seconds
+    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // Reduced to 30 seconds
 
     await sendRoundStart(battle);
     return;
   }
 
   // Update board for user
-  battle.currentPlayer = user;
+  battle.turn = user;
   const header = headerForPlayer(battle, user);
   const text =
     `${header}\n\n` +
     `*Tur: ${battle.round}/${battle.rounds}*\n` +
     `📊 Hesap: ${battle.roundWins[user]} - ${battle.roundWins[boss]}\n` +
-    `🎲 *Seniň hereketiň*\nHereket giriziň: from to (mysal: e2 e4)\n` +
-    boardToText(battle.game);
+    `🎲 Hereket: *Seniň hereketiň*\n` +
+    boardToText(battle.board);
   const msgId = battle.messageIds[user];
-  if (msgId) await editMessageText(user, msgId, text, { reply_markup: makeInlineKeyboard(false), parse_mode: "Markdown" });
-  else await sendMessage(user, text, { reply_markup: makeInlineKeyboard(false), parse_mode: "Markdown" });
-}
-
-// -------------------- Move handler --------------------
-async function handleMove(fromId: string, text: string, battle: any) {
-  const parts = text.trim().replace(/-/g, ' ').split(/\s+/);
-  if (parts.length < 2) {
-    await sendMessage(fromId, "❌ Nädogry hereket. Format: from to (mysal: e2 e4)");
-    return;
-  }
-  const [from, to] = parts;
-  let promotion = 'q';
-  if (parts.length > 2) promotion = parts[2];
-
-  try {
-    const move = battle.game.move({ from, to, promotion });
-    if (!move) {
-      await sendMessage(fromId, "❌ Nädogry hereket.");
-      return;
-    }
-  } catch (e) {
-    await sendMessage(fromId, "❌ Nädogry hereket.");
-    return;
-  }
-
-  const winResult = checkWin(battle.game);
-  let roundWinner: string | undefined;
-  if (winResult) {
-    const { winner } = winResult as any;
-    if (winner !== "draw") {
-      roundWinner = battle.playerByColor[winner];
-      battle.roundWins[roundWinner] = (battle.roundWins[roundWinner] || 0) + 1;
-    }
-
-    let boardText = boardToText(battle.game);
-    if (winner === "draw") {
-      boardText += `\n🤝 *Deňlik!*`;
-    }
-
-    for (const player of battle.players.filter((p: string) => !p.startsWith("boss_"))) {
-      const msgId = battle.messageIds[player];
-      const header = headerForPlayer(battle, player);
-      let text = `${header}\n\n*Tur ${battle.round} Netijesi!*\n`;
-      if (winner === "draw") text += `🤝 Deňlik boldy!\n`;
-      else text += `${roundWinner === player ? "🎉 Siz turda ýeňdiňiz!" : "😢 Siz turda utuldyňyz"}\n`;
-      text += `📊 Hesap: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n${boardText}`;
-      if (msgId) await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(true), parse_mode: "Markdown" });
-      else await sendMessage(player, text, { parse_mode: "Markdown" });
-    }
-
-    // Check if match over
-    const neededWins = Math.ceil(battle.rounds / 2);
-    if (battle.roundWins[battle.players[0]] >= neededWins || battle.roundWins[battle.players[1]] >= neededWins || battle.round === battle.rounds) {
-      if (battle.roundWins[battle.players[0]] > battle.roundWins[battle.players[1]]) {
-        await finishMatch(battle, { winner: battle.players[0], loser: battle.players[1] });
-      } else if (battle.roundWins[battle.players[1]] > battle.roundWins[battle.players[0]]) {
-        await finishMatch(battle, { winner: battle.players[1], loser: battle.players[0] });
-      } else {
-        await finishMatch(battle, { draw: true });
-      }
-      return;
-    }
-
-    // Next round
-    battle.round++;
-    battle.game = new Chess();
-    battle.currentPlayer = battle.players[(battle.round - 1) % 2];
-
-    if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
-    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // 30 seconds
-
-    await sendRoundStart(battle);
-    return;
-  }
-
-  // Continue
-  battle.currentPlayer = battle.players.find((p: string) => p !== fromId)!;
-  for (const player of battle.players.filter((p: string) => !p.startsWith("boss_"))) {
-    const header = headerForPlayer(battle, player);
-    const yourTurn = battle.currentPlayer === player;
-    const moveInstruction = yourTurn ? "\n\n🎲 *Seniň hereketiň*\nHereket giriziň: from to (mysal: e2 e4)" : "\n\nGarşydaşyň hereketi";
-    const text =
-      `${header}\n\n` +
-      `*Tur: ${battle.round}/${battle.rounds}*\n` +
-      `📊 Hesap: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n` +
-      `${moveInstruction}\n` +
-      boardToText(battle.game);
-    const msgId = battle.messageIds[player];
-    if (msgId) await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(false), parse_mode: "Markdown" });
-    else await sendMessage(player, text, { reply_markup: makeInlineKeyboard(false), parse_mode: "Markdown" });
-  }
-
-  if (battle.isBoss && battle.currentPlayer.startsWith("boss_")) {
-    await makeBossMove(battle);
-  }
+  if (msgId) await editMessageText(user, msgId, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
+  else await sendMessage(user, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
 }
 
 // -------------------- Callback handler --------------------
@@ -822,12 +771,12 @@ async function handleCallback(cb: any) {
   // Reset timers
   if (battle.idleTimerId) {
     clearTimeout(battle.idleTimerId);
-    battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 3 * 60 * 1000); // 3 minutes
+    battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 3 * 60 * 1000); // Reduced to 3 minutes
   }
 
   if (battle.moveTimerId) {
     clearTimeout(battle.moveTimerId);
-    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // 30 seconds
+    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // Reduced to 30 seconds
   }
 
   if (data === "surrender") {
@@ -839,7 +788,102 @@ async function handleCallback(cb: any) {
     return;
   }
 
-  await answerCallbackQuery(callbackId);
+  if (!data.startsWith("move:")) {
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  const idx = parseInt(data.split(":")[1]);
+  if (isNaN(idx) || idx < 0 || idx > 8) {
+    await answerCallbackQuery(callbackId, "Nädogry hereket.", true);
+    return;
+  }
+  if (battle.turn !== fromId) {
+    await answerCallbackQuery(callbackId, "Seniň hereketiň däl.", true);
+    return;
+  }
+  if (battle.board[idx] !== "") {
+    await answerCallbackQuery(callbackId, "Bu ýer eýýäm eýelenen.", true);
+    return;
+  }
+
+  const mark = battle.marks[fromId];
+  battle.board[idx] = mark;
+
+  const winResult = checkWin(battle.board);
+  let roundWinner: string | undefined;
+  if (winResult) {
+    const { winner, line } = winResult as any;
+    if (winner !== "draw") {
+      roundWinner = battle.players.find((p: string) => battle.marks[p] === winner)!;
+      battle.roundWins[roundWinner] = (battle.roundWins[roundWinner] || 0) + 1;
+    }
+
+    let boardText = boardToText(battle.board);
+    if (line) {
+      boardText += `\n🎉 *Çyzyk:* ${line.map((i: number) => i + 1).join("-")}`;
+    } else if (winner === "draw") {
+      boardText += `\n🤝 *Deňlik!*`;
+    }
+
+    for (const player of battle.players.filter((p: string) => !p.startsWith("boss_"))) {
+      const msgId = battle.messageIds[player];
+      const header = headerForPlayer(battle, player);
+      let text = `${header}\n\n*Tur ${battle.round} Netijesi!*\n`;
+      if (winner === "draw") text += `🤝 Deňlik boldy!\n`;
+      else text += `${roundWinner === player ? "🎉 Siz turda ýeňdiňiz!" : "😢 Siz turda utuldyňyz"}\n`;
+      text += `📊 Hesap: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n${boardText}`;
+      if (msgId) await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board, true), parse_mode: "Markdown" });
+      else await sendMessage(player, text, { parse_mode: "Markdown" });
+    }
+
+    // Check if match over
+    const neededWins = Math.ceil(battle.rounds / 2);
+    if (battle.roundWins[battle.players[0]] >= neededWins || battle.roundWins[battle.players[1]] >= neededWins || battle.round === battle.rounds) {
+      if (battle.roundWins[battle.players[0]] > battle.roundWins[battle.players[1]]) {
+        await finishMatch(battle, { winner: battle.players[0], loser: battle.players[1] });
+      } else if (battle.roundWins[battle.players[1]] > battle.roundWins[battle.players[0]]) {
+        await finishMatch(battle, { winner: battle.players[1], loser: battle.players[0] });
+      } else {
+        await finishMatch(battle, { draw: true });
+      }
+      await answerCallbackQuery(callbackId);
+      return;
+    }
+
+    // Next round
+    battle.round++;
+    battle.board = createEmptyBoard();
+    battle.turn = battle.players[(battle.round - 1) % 2];
+
+    if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
+    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 30 * 1000); // Reduced to 30 seconds
+
+    await sendRoundStart(battle);
+    await answerCallbackQuery(callbackId, "Hereket edildi!");
+    return;
+  }
+
+  // Continue
+  battle.turn = battle.players.find((p: string) => p !== fromId)!;
+  for (const player of battle.players.filter((p: string) => !p.startsWith("boss_"))) {
+    const header = headerForPlayer(battle, player);
+    const yourTurn = battle.turn === player;
+    const text =
+      `${header}\n\n` +
+      `*Tur: ${battle.round}/${battle.rounds}*\n` +
+      `📊 Hesap: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n` +
+      `🎲 Hereket: ${yourTurn ? "*Seniň hereketiň*" : "Garşydaşyň hereketi"}\n` +
+      boardToText(battle.board);
+    const msgId = battle.messageIds[player];
+    if (msgId) await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
+    else await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
+  }
+  await answerCallbackQuery(callbackId, "Hereket edildi!");
+
+  if (battle.isBoss && battle.turn.startsWith("boss_")) {
+    await makeBossMove(battle);
+  }
 }
 
 // -------------------- Withdrawal functionality --------------------
@@ -1383,8 +1427,8 @@ async function handleCommand(fromId: string, username: string | undefined, displ
 
     const userCount = await getUserCount();
     const helpText =
-      `🌟 Salam! TkmChess BOT-a hoş geldiňiz!\n\n` +
-      `🎮 Chess oýuny bilen, söweş ediň we gazanç alyň. ⚔️\n\n` +
+      `🌟 Salam! TkmXO BOT-a hoş geldiňiz!\n\n` +
+      `🎮 TkmXO oýuny bilen, söweş ediň we gazanç alyň. ⚔️\n\n` +
       `🎁 Başlangyç üçin /battle bilen kubok üçin söweş. TMT-a oýnamak üçin /realbattle 1 TMT goýuň we utsaňyz onuň üstüne +0.75 TMT gazanyň. 😄\n\n` +
       `👥 Dostlaryňyzy çagyryň we TMT gazanyň! Çagyran her bir dostuňyz üçin 0.2 TMT gazanyň. 💸\n\n` +
       `👥 Umumy ulanyjy sany: ${userCount}\n\n` +
@@ -1442,13 +1486,6 @@ serve(async (req: Request) => {
         await handleBossInput(fromId, text);
       } else if (await getCreateBossState(fromId) && msg.photo) {
         await handleCreateBoss(msg, fromId);
-      } else if (battles[fromId]) {
-        const battle = battles[fromId];
-        if (battle.currentPlayer === fromId) {
-          await handleMove(fromId, text, battle);
-        } else {
-          await sendMessage(fromId, "❓ Seniň hereketiň däl.");
-        }
       } else {
         await sendMessage(fromId, "❓ Näbelli buýruk. /help gör.");
       }
@@ -1464,6 +1501,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
