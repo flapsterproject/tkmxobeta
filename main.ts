@@ -29,11 +29,72 @@ let queue: string[] = [];
 let trophyQueue: string[] = [];
 const battles: Record<string, any> = {};
 const searchTimeouts: Record<string, number> = {};
-const withdrawalStates: Record<string, { amount: number; step: "amount" | "phone" }> = {};
-const promocodeStates: Record<string, boolean> = {};
-const bossStates: Record<string, boolean> = {};
-const createBossStates: Record<string, boolean> = {};
-const globalMessageStates: Record<string, boolean> = {};
+
+// State helpers using KV
+async function getWithdrawalState(userId: string): Promise<{ amount: number; step: "amount" | "phone" } | null> {
+  const res = await kv.get<{ amount: number; step: "amount" | "phone" }>(["states", "withdrawal", userId]);
+  return res.value;
+}
+
+async function setWithdrawalState(userId: string, state: { amount: number; step: "amount" | "phone" } | null) {
+  if (state) {
+    await kv.set(["states", "withdrawal", userId], state);
+  } else {
+    await kv.delete(["states", "withdrawal", userId]);
+  }
+}
+
+async function getPromocodeState(userId: string): Promise<boolean> {
+  const res = await kv.get<boolean>(["states", "promocode", userId]);
+  return res.value ?? false;
+}
+
+async function setPromocodeState(userId: string, active: boolean) {
+  if (active) {
+    await kv.set(["states", "promocode", userId], true);
+  } else {
+    await kv.delete(["states", "promocode", userId]);
+  }
+}
+
+async function getBossState(userId: string): Promise<boolean> {
+  const res = await kv.get<boolean>(["states", "boss", userId]);
+  return res.value ?? false;
+}
+
+async function setBossState(userId: string, active: boolean) {
+  if (active) {
+    await kv.set(["states", "boss", userId], true);
+  } else {
+    await kv.delete(["states", "boss", userId]);
+  }
+}
+
+async function getCreateBossState(userId: string): Promise<boolean> {
+  const res = await kv.get<boolean>(["states", "createboss", userId]);
+  return res.value ?? false;
+}
+
+async function setCreateBossState(userId: string, active: boolean) {
+  if (active) {
+    await kv.set(["states", "createboss", userId], true);
+  } else {
+    await kv.delete(["states", "createboss", userId]);
+  }
+}
+
+async function getGlobalMessageState(userId: string): Promise<boolean> {
+  const res = await kv.get<boolean>(["states", "globalmessage", userId]);
+  return res.value ?? false;
+}
+
+async function setGlobalMessageState(userId: string, active: boolean) {
+  if (active) {
+    await kv.set(["states", "globalmessage", userId], true);
+  } else {
+    await kv.delete(["states", "globalmessage", userId]);
+  }
+}
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
@@ -822,9 +883,8 @@ async function handleCallback(cb: any) {
 
 // -------------------- Withdrawal functionality --------------------
 async function handleWithdrawal(fromId: string, text: string) {
-  if (withdrawalStates[fromId]) {
-    const state = withdrawalStates[fromId];
-
+  const state = await getWithdrawalState(fromId);
+  if (state) {
     if (state.step === "amount") {
       const amount = parseFloat(text);
 
@@ -841,11 +901,11 @@ async function handleWithdrawal(fromId: string, text: string) {
       const profile = await getProfile(fromId);
       if (!profile || profile.tmt < amount) {
         await sendMessage(fromId, `❌ Ýeterlik TMT ýok. Balans: ${profile?.tmt ?? 0} TMT.`);
-        delete withdrawalStates[fromId];
+        await setWithdrawalState(fromId, null);
         return;
       }
 
-      withdrawalStates[fromId] = { amount, step: "phone" };
+      await setWithdrawalState(fromId, { amount, step: "phone" });
       await sendMessage(fromId, "📱 Telefon nomeriňizi giriziň:");
       return;
     } else if (state.step === "phone") {
@@ -859,7 +919,7 @@ async function handleWithdrawal(fromId: string, text: string) {
       const profile = await getProfile(fromId);
       if (!profile || profile.tmt < amount) {
         await sendMessage(fromId, "❌ Balans ýeterlik däl. Täzeden synanyşyň.");
-        delete withdrawalStates[fromId];
+        await setWithdrawalState(fromId, null);
         return;
       }
 
@@ -877,18 +937,18 @@ async function handleWithdrawal(fromId: string, text: string) {
         const adminMessage = `💰 *ÇYKARMA ISLEGI*\n\nUlanyjy: ${userDisplayName} (ID: ${fromId})\nMukdar: ${amount} TMT\nTelefon: ${phoneNumber}\n\nEl bilen işläň.`;
         await sendMessage(adminId, adminMessage, { parse_mode: "Markdown" });
 
-        delete withdrawalStates[fromId];
+        await setWithdrawalState(fromId, null);
       } catch (error) {
         console.error("Withdrawal error:", error);
         await sendMessage(fromId, "❌ Näsazlyk ýüze çykdy. Täzeden synanyşyň.");
-        delete withdrawalStates[fromId];
+        await setWithdrawalState(fromId, null);
       }
 
       return;
     }
   } else {
     await sendMessage(fromId, "💰 Çykarmak isleýän TMT mukdary giriziň:");
-    withdrawalStates[fromId] = { amount: 0, step: "amount" };
+    await setWithdrawalState(fromId, { amount: 0, step: "amount" });
     return;
   }
 }
@@ -912,21 +972,21 @@ async function handlePromocodeInput(fromId: string, text: string) {
   const promoRes = await kv.get(["promocodes", code]);
   if (!promoRes.value) {
     await sendMessage(fromId, "Bu promokod ýok ýa-da ulanylan.");
-    delete promocodeStates[fromId];
+    await setPromocodeState(fromId, false);
     return;
   }
 
   const promo = promoRes.value as { maxUses: number; currentUses: number };
   if (promo.currentUses >= promo.maxUses) {
     await sendMessage(fromId, "Bu promokod ýok ýa-da ulanylan.");
-    delete promocodeStates[fromId];
+    await setPromocodeState(fromId, false);
     return;
   }
 
   const usedRes = await kv.get(["used_promos", code, fromId]);
   if (usedRes.value) {
     await sendMessage(fromId, "Siz bu promokody eýýäm ulandyňyz.");
-    delete promocodeStates[fromId];
+    await setPromocodeState(fromId, false);
     return;
   }
 
@@ -938,7 +998,7 @@ async function handlePromocodeInput(fromId: string, text: string) {
 
   await updateProfile(fromId, { tmt: 1 });
   await sendMessage(fromId, "✅ Promokod üstünlikli! +1 TMT aldyňyz.");
-  delete promocodeStates[fromId];
+  await setPromocodeState(fromId, false);
 }
 
 // -------------------- Boss input handler --------------------
@@ -947,21 +1007,21 @@ async function handleBossInput(fromId: string, text: string) {
   const bossRes = await kv.get(["bosses", name]);
   if (!bossRes.value) {
     await sendMessage(fromId, "Bu boss ýok ýa-da ulanylan.");
-    delete bossStates[fromId];
+    await setBossState(fromId, false);
     return;
   }
 
   const boss = bossRes.value as { photoId: string; rounds: number; maxUses: number; currentUses: number; reward: number };
   if (boss.currentUses >= boss.maxUses) {
     await sendMessage(fromId, "Bu boss ýok ýa-da ulanylan.");
-    delete bossStates[fromId];
+    await setBossState(fromId, false);
     return;
   }
 
   const playedRes = await kv.get(["played_boss", name, fromId]);
   if (playedRes.value) {
     await sendMessage(fromId, "Siz bu boss bilen eýýäm oýnadyňyz.");
-    delete bossStates[fromId];
+    await setBossState(fromId, false);
     return;
   }
 
@@ -972,7 +1032,7 @@ async function handleBossInput(fromId: string, text: string) {
   await atomic.commit();
 
   await startBossBattle(fromId, name, boss);
-  delete bossStates[fromId];
+  await setBossState(fromId, false);
 }
 
 // -------------------- Create boss handler --------------------
@@ -1004,7 +1064,7 @@ async function handleCreateBoss(msg: any, fromId: string) {
 
   await kv.set(["bosses", name], { photoId, rounds, maxUses, currentUses: 0, reward });
   await sendMessage(fromId, `✅ Boss döredildi: ${name}`);
-  delete createBossStates[fromId];
+  await setCreateBossState(fromId, false);
 }
 
 // -------------------- Stats for admin --------------------
@@ -1066,25 +1126,25 @@ async function handleCommand(fromId: string, username: string | undefined, displ
   }
 
   // Close any active states before handling new command
-  if (withdrawalStates[fromId]) {
+  if (await getWithdrawalState(fromId)) {
     await sendMessage(fromId, "Çykarma sahypasy ýapyldy");
-    delete withdrawalStates[fromId];
+    await setWithdrawalState(fromId, null);
   }
-  if (promocodeStates[fromId]) {
+  if (await getPromocodeState(fromId)) {
     await sendMessage(fromId, "Promokod sahypasy ýapyldy");
-    delete promocodeStates[fromId];
+    await setPromocodeState(fromId, false);
   }
-  if (bossStates[fromId]) {
+  if (await getBossState(fromId)) {
     await sendMessage(fromId, "Boss sahypasy ýapyldy");
-    delete bossStates[fromId];
+    await setBossState(fromId, false);
   }
-  if (createBossStates[fromId]) {
+  if (await getCreateBossState(fromId)) {
     await sendMessage(fromId, "Boss döretme sahypasy ýapyldy");
-    delete createBossStates[fromId];
+    await setCreateBossState(fromId, false);
   }
-  if (globalMessageStates[fromId]) {
+  if (await getGlobalMessageState(fromId)) {
     await sendMessage(fromId, "Global habar sahypasy ýapyldy");
-    delete globalMessageStates[fromId];
+    await setGlobalMessageState(fromId, false);
   }
 
   if (text.startsWith("/battle")) {
@@ -1178,13 +1238,13 @@ async function handleCommand(fromId: string, username: string | undefined, displ
   }
 
   if (text.startsWith("/promocode")) {
-    promocodeStates[fromId] = true;
+    await setPromocodeState(fromId, true);
     await sendMessage(fromId, "Promokody giriziň:");
     return;
   }
 
   if (text.startsWith("/boss")) {
-    bossStates[fromId] = true;
+    await setBossState(fromId, true);
     await sendMessage(fromId, "Boss adyny giriziň:");
     return;
   }
@@ -1215,7 +1275,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       await sendMessage(fromId, "❌ Ruhsat ýok.");
       return;
     }
-    createBossStates[fromId] = true;
+    await setCreateBossState(fromId, true);
     await sendMessage(fromId, "Boss suratyny ýazgy bilen iberiň: <aty> <turlar> <max_sany> <baha>");
     return;
   }
@@ -1253,7 +1313,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       await sendMessage(fromId, "❌ Ruhsat ýok.");
       return;
     }
-    globalMessageStates[fromId] = true;
+    await setGlobalMessageState(fromId, true);
     await sendMessage(fromId, "✏️ Global habary ýazyň:");
     return;
   }
@@ -1316,10 +1376,12 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       const name = entry.key[1] as string;
       await kv.delete(["played_boss", name, userId]);
     }
-    // Delete runtime states
-    delete withdrawalStates[userId];
-    delete promocodeStates[userId];
-    delete bossStates[userId];
+    // Delete states
+    await setWithdrawalState(userId, null);
+    await setPromocodeState(userId, false);
+    await setBossState(userId, false);
+    await setCreateBossState(userId, false);
+    await setGlobalMessageState(userId, false);
     await sendMessage(fromId, `✅ Ulanyjy ID:${userId} öçürildi.`);
     return;
   }
@@ -1388,21 +1450,21 @@ serve(async (req: Request) => {
 
       if (text.startsWith("/")) {
         await handleCommand(fromId, username, displayName, text, isNew);
-      } else if (globalMessageStates[fromId]) {
-        globalMessageStates[fromId] = false;
+      } else if (await getGlobalMessageState(fromId)) {
+        await setGlobalMessageState(fromId, false);
         for await (const entry of kv.list({ prefix: ["profiles"] })) {
           const profile = entry.value as Profile;
           if (!profile) continue;
           await sendMessage(profile.id, `📢 *Global habar:*\n\n${text}`, { parse_mode: "Markdown" });
         }
         await sendMessage(fromId, "✅ Global habar iberildi!");
-      } else if (withdrawalStates[fromId]) {
+      } else if (await getWithdrawalState(fromId)) {
         await handleWithdrawal(fromId, text);
-      } else if (promocodeStates[fromId]) {
+      } else if (await getPromocodeState(fromId)) {
         await handlePromocodeInput(fromId, text);
-      } else if (bossStates[fromId]) {
+      } else if (await getBossState(fromId)) {
         await handleBossInput(fromId, text);
-      } else if (createBossStates[fromId] && msg.photo) {
+      } else if (await getCreateBossState(fromId) && msg.photo) {
         await handleCreateBoss(msg, fromId);
       } else {
         await sendMessage(fromId, "❓ Näbelli buýruk. /help gör.");
