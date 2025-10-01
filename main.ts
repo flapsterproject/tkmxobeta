@@ -212,6 +212,28 @@ async function sendProfile(chatId: string) {
   await sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
+async function sendUserProfile(adminChatId: string, userId: string) {
+  const p = await getProfile(userId);
+  if (!p) {
+    await sendMessage(adminChatId, `❌ Ulanyjy ID:${userId} tapylmady.`);
+    return;
+  }
+  const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
+  const referralLink = `https://t.me/${BOT_USERNAME}?start=${p.id}`;
+  const msg =
+    `🏅 *Profil: ${getDisplayName(p)}*\n\n` +
+    `🆔 ID: \`${p.id}\`\n\n` +
+    `🏆 Kuboklar: *${p.trophies}*\n` +
+    `💰 TMT Balans: *${p.tmt}*\n` +
+    `🏅 Dereje: *${getRank(p.trophies)}*\n` +
+    `🎲 Oýnalan oýunlar: *${p.gamesPlayed}*\n` +
+    `✅ Ýeňişler: *${p.wins}* | ❌ Utulyşlar: *${p.losses}* | 🤝 Deňlikler: *${p.draws}*\n` +
+    `📈 Ýeňiş göterimi: *${winRate}%*\n` +
+    `👥 Referallar: *${p.referrals}*\n\n` +
+    `🔗 Referral link: \`${referralLink}\``;
+  await sendMessage(adminChatId, msg, { parse_mode: "Markdown" });
+}
+
 // -------------------- Leaderboard helpers --------------------
 async function getLeaderboard(top = 10, offset = 0): Promise<{top: Profile[], total: number}> {
   const players: Profile[] = [];
@@ -1110,6 +1132,21 @@ async function handleCommand(fromId: string, username: string | undefined, displ
 
   if (text.startsWith("/profile")) {
     await sendProfile(fromId);
+    return;
+  }
+
+  if (text.startsWith("/userprofile")) {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(fromId, "❌ Ruhsat ýok.");
+      return;
+    }
+    const parts = text.trim().split(/\s+/);
+    if (parts.length < 2) {
+      await sendMessage(fromId, "Ulanyş: /userprofile <userId>");
+      return;
+    }
+    const [, userId] = parts;
+    await sendUserProfile(fromId, userId);
     return;
   }
 
