@@ -1428,7 +1428,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     const userCount = await getUserCount();
     const helpText =
       `🌟 Salam! TkmXO BOT-a hoş geldiňiz!\n\n` +
-      `🎮 TkmXO oyuny bilen, dostlaryňyz bilen söweş ediň. ⚔️\n\n` +
+      `🎮 TkmXO oyuny bilen, söweş ediň we gazanç alyň. ⚔️\n\n` +
       `🎁 Başlangyç üçin /battle bilen kubok üçin söweş. TMT-a oýnamak üçin /realbattle 1 TMT goýuň we utsaňyz onuň üstüne +0.75 TMT gazanyň. 😄\n\n` +
       `👥 Dostlaryňyzy çagyryň we TMT gazanyň! Çagyran her bir dostuňyz üçin 0.2 TMT gazanyň. 💸\n\n` +
       `👥 Umumy ulanyjy sany: ${userCount}\n\n` +
