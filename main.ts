@@ -1116,6 +1116,22 @@ async function sendStats(chatId: string) {
   await sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
+// -------------------- User count helper --------------------
+async function getUserCount(): Promise<number> {
+  let count = 0;
+  try {
+    for await (const entry of kv.list({ prefix: ["profiles"] })) {
+      if (!entry.value) continue;
+      const p = entry.value as Profile;
+      if (p.id.startsWith("boss_")) continue;
+      count++;
+    }
+  } catch (e) {
+    console.error("getUserCount error", e);
+  }
+  return count;
+}
+
 // -------------------- Commands --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string, isNew: boolean) {
   if (!(await isSubscribed(fromId))) {
@@ -1401,18 +1417,14 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       }
     }
 
+    const userCount = await getUserCount();
     const helpText =
-      `🎮 *TkmXO Bot-a hoş geldiňiz!*\n\n` +
-      `Dostlaryňyzy çagyryň we her referral üçin 0.2 TMT gazanyň!\n\n` +
-      `Buýruklar:\n` +
-      `🔹 /battle - Kubok söweş üçin garşydaş tap.\n` +
-      `🔹 /realbattle - TMT söweş (1 TMT goýum).\n` +
-      `🔹 /profile - Statistika we dereje.\n` +
-      `🔹 /leaderboard - Liderler.\n` +
-      `🔹 /promocode - Promokod ulan.\n` +
-      `🔹 /boss - Boss bilen söweş.\n` +
-      `🔹 /withdraw - TMT çykar.\n\n` +
-      `Üstünlik!`;
+      `🌟 Salam! TkmXO BOT-a hoş geldiňiz!\n\n` +
+      `🎮 TkmXO oyuny bilen, dostlaryňyz bilen ýa-da AI bilen söweş ediň. ⚔️\n\n` +
+      `🎁 Ilkinji synanyşyk mugt! Başlangyç üçin mugt /battle bilen botu barlaň. Has köp oýnamak üçin /realbattle-da TMT goýuň. 😄\n\n` +
+      `👥 Dostlaryňyzy çagyryň we TMT gazanyň! Çagyrýan her bir dostuňyz üçin 0.2 TMT gazanyň. 💸\n\n` +
+      `👥 Umumy ulanyjy sany: ${userCount}\n\n` +
+      `🚀 Başlamak üçin aşakdaky düwmelerden birini saýla:`;
     const mainMenu = {
       inline_keyboard: [
         [{ text: "⚔️ Battle", callback_data: "menu:battle" }, { text: "🏆 Real Battle", callback_data: "menu:realbattle" }],
