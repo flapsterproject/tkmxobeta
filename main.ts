@@ -17,6 +17,7 @@ if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/tkmxo"; // make sure webhook path matches
 const CHANNEL = "@TkmXO";
+const CHAT_CHANNEL = "@TkmXOChat";
 const BOT_USERNAME = "TkmXOBot"; // Adjust to your bot's username
 
 // Deno KV
@@ -153,16 +154,20 @@ async function answerCallbackQuery(id: string, text = "", showAlert = false) {
 
 // -------------------- Subscription check --------------------
 async function isSubscribed(userId: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${API}/getChatMember?chat_id=${CHANNEL}&user_id=${userId}`);
-    const data = await res.json();
-    if (!data.ok) return false;
-    const status = data.result.status;
-    return ['creator', 'administrator', 'member'].includes(status);
-  } catch (e) {
-    console.error("isSubscribed error", e);
-    return false;
+  const channels = [CHANNEL, CHAT_CHANNEL];
+  for (const ch of channels) {
+    try {
+      const res = await fetch(`${API}/getChatMember?chat_id=${ch}&user_id=${userId}`);
+      const data = await res.json();
+      if (!data.ok) return false;
+      const status = data.result.status;
+      if (!['creator', 'administrator', 'member'].includes(status)) return false;
+    } catch (e) {
+      console.error("isSubscribed error for " + ch, e);
+      return false;
+    }
   }
+  return true;
 }
 
 // -------------------- Profile helpers --------------------
@@ -1135,8 +1140,11 @@ async function getUserCount(): Promise<number> {
 // -------------------- Commands --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string, isNew: boolean) {
   if (!(await isSubscribed(fromId))) {
-    await sendMessage(fromId, "Bot ulanmak üçin @TkmXO kanala ýazyl. Ýazyl we täzeden synanyş.", {
-      reply_markup: { inline_keyboard: [[{ text: "Ýazyl", url: "https://t.me/TkmXO" }]] }
+    await sendMessage(fromId, "Bot ulanmak üçin @TkmXO we @TkmXOChat kanallara ýazyl. Ýazyl we täzeden synanyş.", {
+      reply_markup: { inline_keyboard: [
+        [{ text: "Ýazyl @TkmXO", url: "https://t.me/TkmXO" }],
+        [{ text: "Ýazyl @TkmXOChat", url: "https://t.me/TkmXOChat" }]
+      ] }
     });
     return;
   }
@@ -1420,17 +1428,17 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     const userCount = await getUserCount();
     const helpText =
       `🌟 Salam! TkmXO BOT-a hoş geldiňiz!\n\n` +
-      `🎮 TkmXO oyuny bilen, dostlaryňyz bilen ýa-da AI bilen söweş ediň. ⚔️\n\n` +
-      `🎁 Ilkinji synanyşyk mugt! Başlangyç üçin mugt /battle bilen botu barlaň. Has köp oýnamak üçin /realbattle-da TMT goýuň. 😄\n\n` +
-      `👥 Dostlaryňyzy çagyryň we TMT gazanyň! Çagyrýan her bir dostuňyz üçin 0.2 TMT gazanyň. 💸\n\n` +
+      `🎮 TkmXO oyuny bilen, dostlaryňyz bilen söweş ediň. ⚔️\n\n` +
+      `🎁 Başlangyç üçin /battle bilen kubok üçin söweş. TMT-a oýnamak üçin /realbattle 1 TMT goýuň we utsaňyz onuň üstüne +0.75 TMT gazanyň. 😄\n\n` +
+      `👥 Dostlaryňyzy çagyryň we TMT gazanyň! Çagyran her bir dostuňyz üçin 0.2 TMT gazanyň. 💸\n\n` +
       `👥 Umumy ulanyjy sany: ${userCount}\n\n` +
       `🚀 Başlamak üçin aşakdaky düwmelerden birini saýla:`;
     const mainMenu = {
       inline_keyboard: [
-        [{ text: "⚔️ Battle", callback_data: "menu:battle" }, { text: "🏆 Real Battle", callback_data: "menu:realbattle" }],
-        [{ text: "🤖 Boss", callback_data: "menu:boss" }, { text: "🎟️ Promocode", callback_data: "menu:promocode" }],
-        [{ text: "📊 Profile", callback_data: "menu:profile" }, { text: "🏅 Leaderboard", callback_data: "menu:leaderboard" }],
-        [{ text: "💸 Withdraw", callback_data: "menu:withdraw" }],
+        [{ text: "⚔️ Kubok söweş", callback_data: "menu:battle" }, { text: "🏆 TMT söweş", callback_data: "menu:realbattle" }],
+        [{ text: "🤖 Boss söweş", callback_data: "menu:boss" }, { text: "🎟️ Promokod", callback_data: "menu:promocode" }],
+        [{ text: "📊 Profil", callback_data: "menu:profile" }, { text: "🏅 Liderler", callback_data: "menu:leaderboard" }],
+        [{ text: "💸 Puly çekmek", callback_data: "menu:withdraw" }],
       ]
     };
     await sendMessage(fromId, helpText, { parse_mode: "Markdown", reply_markup: mainMenu });
