@@ -1065,6 +1065,28 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
+  // Close any active states before handling new command
+  if (withdrawalStates[fromId]) {
+    await sendMessage(fromId, "Çykarma sahypasy ýapyldy");
+    delete withdrawalStates[fromId];
+  }
+  if (promocodeStates[fromId]) {
+    await sendMessage(fromId, "Promokod sahypasy ýapyldy");
+    delete promocodeStates[fromId];
+  }
+  if (bossStates[fromId]) {
+    await sendMessage(fromId, "Boss sahypasy ýapyldy");
+    delete bossStates[fromId];
+  }
+  if (createBossStates[fromId]) {
+    await sendMessage(fromId, "Boss döretme sahypasy ýapyldy");
+    delete createBossStates[fromId];
+  }
+  if (globalMessageStates[fromId]) {
+    await sendMessage(fromId, "Global habar sahypasy ýapyldy");
+    delete globalMessageStates[fromId];
+  }
+
   if (text.startsWith("/battle")) {
     if (queue.includes(fromId) || trophyQueue.includes(fromId)) {
       await sendMessage(fromId, "Siz eýýäm nobatda.");
